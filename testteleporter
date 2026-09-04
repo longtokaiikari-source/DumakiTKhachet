@@ -1,248 +1,174 @@
--- ====== SCRIPT: LocalScript (đặt trong StarterPlayerScripts hoặc StarterGui) ======
--- Tạo UI chính (có thể kéo) và một nút kéo (floating button) để mở/đóng UI đó.
+-- ====== SCRIPT HOÀN CHỈNH (LocalScript đặt trong StarterGui hoặc StarterPlayerScripts) ======
+-- Dựa trên script dump gốc, tôi đã thêm chức năng lưu nhiều điểm tọa độ với tên.
+-- Các chức năng: hiển thị tọa độ hiện tại, thêm điểm mới (lấy tên từ input), xóa điểm, teleport đến điểm đã chọn, copy tọa độ, clear.
 
 local player = game.Players.LocalPlayer
 local mouse = player:GetMouse()
 
--- Tạo ScreenGui gốc
-local mainGui = Instance.new("ScreenGui")
-mainGui.Name = "MainGUI"
-mainGui.Parent = player:WaitForChild("PlayerGui")
+-- Tạo GUI chính
+local gui = Instance.new("ScreenGui")
+gui.Name = "PositionTrackerPlus"
+gui.Parent = player:WaitForChild("PlayerGui")
 
--- ====== 1. TẠO NÚT KÉO (FLOATING BUTTON) ======
-local dragButton = Instance.new("ImageButton") -- dùng ImageButton hoặc TextButton
-dragButton.Size = UDim2.new(0, 60, 0, 60)
-dragButton.Position = UDim2.new(0.9, -70, 0.1, 10) -- góc phải trên
-dragButton.BackgroundColor3 = Color3.fromRGB(30, 144, 255)
-dragButton.BackgroundTransparency = 0.2
-dragButton.ImageColor3 = Color3.new(1,1,1)
-dragButton.Image = "rbxassetid://6031090996" -- icon bánh răng (có thể đổi)
-dragButton.ImageRectOffset = Vector2.new(0, 0)
-dragButton.Parent = mainGui
--- Thêm viền bo tròn
-local corner1 = Instance.new("UICorner")
-corner1.CornerRadius = UDim.new(1, 0)
-corner1.Parent = dragButton
-
--- Thêm chữ "Menu" bên dưới (tùy chọn)
-local label = Instance.new("TextLabel")
-label.Size = UDim2.new(1, 0, 0.4, 0)
-label.Position = UDim2.new(0, 0, 0.6, 0)
-label.BackgroundTransparency = 1
-label.Text = "Menu"
-label.TextColor3 = Color3.new(1,1,1)
-label.TextScaled = true
-label.Font = Enum.Font.SourceSansBold
-label.Parent = dragButton
-
--- Cho phép kéo nút này (draggable)
-local function makeDraggable(guiObject)
-    local dragging = false
-    local dragStart = nil
-    local startPos = nil
-    
-    guiObject.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dragStart = input.Position
-            startPos = guiObject.Position
-        end
-    end)
-    
-    guiObject.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            local delta = input.Position - dragStart
-            -- Cập nhật vị trí theo tỉ lệ (offset)
-            local newX = startPos.X.Offset + delta.X
-            local newY = startPos.Y.Offset + delta.Y
-            -- Giới hạn không ra ngoài màn hình (tùy chỉnh)
-            newX = math.clamp(newX, 0, screenGui.AbsoluteSize.X - guiObject.AbsoluteSize.X)
-            newY = math.clamp(newY, 0, screenGui.AbsoluteSize.Y - guiObject.AbsoluteSize.Y)
-            guiObject.Position = UDim2.new(0, newX, 0, newY)
-        end
-    end)
-    
-    guiObject.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = false
-        end
-    end)
-end
-
--- Lấy ScreenGui để tính giới hạn (cần dùng AbsoluteSize sau khi render)
--- Nhưng ở đây ta dùng camera viewport, có thể bỏ qua giới hạn hoặc dùng wait().
--- Cách đơn giản: không giới hạn hoặc dùng PlayerGui.AbsoluteSize.
--- Tôi sẽ tạo hàm kéo đơn giản không giới hạn chặt chẽ (vẫn kéo ra ngoài được, nhưng thực tế vẫn nằm trong màn hình gốc)
--- Để giới hạn đúng, ta dùng wait() cho đến khi gui xuất hiện.
-
-task.wait(0.1) -- chờ render
-makeDraggable(dragButton)
-
--- ====== 2. TẠO UI CHÍNH (CÓ THỂ KÉO) ======
+-- Frame chính (có thể kéo)
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 400, 0, 300)
-mainFrame.Position = UDim2.new(0.5, -200, 0.5, -150)
+mainFrame.Size = UDim2.new(0, 450, 0, 380)
+mainFrame.Position = UDim2.new(0.5, -225, 0.5, -190)
 mainFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
-mainFrame.BackgroundTransparency = 0.1
+mainFrame.BackgroundTransparency = 0.2
 mainFrame.Active = true
-mainFrame.Visible = false -- ban đầu ẩn
-mainFrame.Parent = mainGui
+mainFrame.Draggable = true
+mainFrame.BorderSizePixel = 2
+mainFrame.BorderColor3 = Color3.new(1,1,1)
+mainFrame.Visible = false -- ẩn ban đầu
+mainFrame.Parent = gui
 
 -- Bo góc
-local corner2 = Instance.new("UICorner")
-corner2.CornerRadius = UDim.new(0, 12)
-corner2.Parent = mainFrame
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 12)
+corner.Parent = mainFrame
 
 -- Tiêu đề
-local titleBar = Instance.new("Frame")
-titleBar.Size = UDim2.new(1, 0, 0, 30)
-titleBar.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
-titleBar.BackgroundTransparency = 0.3
-titleBar.Parent = mainFrame
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, 0, 0, 30)
+title.BackgroundTransparency = 1
+title.Text = "POSITION TRACKER + MULTI-POINT"
+title.TextColor3 = Color3.new(1,1,1)
+title.TextScaled = true
+title.Font = Enum.Font.SourceSansBold
+title.Parent = mainFrame
 
-local titleText = Instance.new("TextLabel")
-titleText.Size = UDim2.new(1, -40, 1, 0)
-titleText.Position = UDim2.new(0, 10, 0, 0)
-titleText.BackgroundTransparency = 1
-titleText.Text = "BẢNG ĐIỀU KHIỂN"
-titleText.TextColor3 = Color3.new(1,1,1)
-titleText.TextXAlignment = Enum.TextXAlignment.Left
-titleText.Font = Enum.Font.SourceSansBold
-titleText.TextSize = 18
-titleText.Parent = titleBar
+-- Ô hiển thị tọa độ (TextBox chỉ đọc)
+local coordBox = Instance.new("TextBox")
+coordBox.Size = UDim2.new(0.8, 0, 0, 40)
+coordBox.Position = UDim2.new(0.1, 0, 0.1, 0)
+coordBox.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+coordBox.Text = "Coordinates: "
+coordBox.TextColor3 = Color3.new(1,1,1)
+coordBox.TextScaled = true
+coordBox.ClearTextOnFocus = false
+coordBox.TextEditable = false
+coordBox.Parent = mainFrame
+-- Bo góc cho coordBox
+local corner2 = Instance.new("UICorner")
+corner2.CornerRadius = UDim.new(0, 8)
+corner2.Parent = coordBox
 
--- Nút đóng (X)
-local closeBtn = Instance.new("TextButton")
-closeBtn.Size = UDim2.new(0, 30, 1, 0)
-closeBtn.Position = UDim2.new(1, -30, 0, 0)
-closeBtn.Text = "X"
-closeBtn.TextColor3 = Color3.new(1,1,1)
-closeBtn.BackgroundTransparency = 1
-closeBtn.Font = Enum.Font.SourceSansBold
-closeBtn.TextSize = 18
-closeBtn.Parent = titleBar
-closeBtn.MouseButton1Click:Connect(function()
-    mainFrame.Visible = false
-end)
+-- Ô nhập tên điểm mới
+local nameBox = Instance.new("TextBox")
+nameBox.Size = UDim2.new(0.5, 0, 0, 30)
+nameBox.Position = UDim2.new(0.05, 0, 0.25, 0)
+nameBox.PlaceholderText = "Tên điểm"
+nameBox.BackgroundColor3 = Color3.fromRGB(50,50,60)
+nameBox.TextColor3 = Color3.new(1,1,1)
+nameBox.TextScaled = true
+nameBox.ClearTextOnFocus = true
+nameBox.Parent = mainFrame
+local corner3 = Instance.new("UICorner")
+corner3.CornerRadius = UDim.new(0, 6)
+corner3.Parent = nameBox
 
--- Cho phép kéo toàn bộ mainFrame (kéo bằng titleBar)
-makeDraggable(mainFrame) -- kéo cả frame
--- Nhưng để tiện, ta gán sự kiện kéo chỉ cho titleBar, còn mainFrame vẫn giữ nguyên vị trí theo titleBar.
--- Cách trên đã cho kéo cả frame, nhưng nếu click vào titleBar thì dễ hơn.
--- Tôi sẽ ghi đè: gán sự kiện kéo riêng cho titleBar để kéo mainFrame.
+-- Nút "Lưu điểm hiện tại"
+local saveBtn = Instance.new("TextButton")
+saveBtn.Size = UDim2.new(0.35, 0, 0, 30)
+saveBtn.Position = UDim2.new(0.6, 0, 0.25, 0)
+saveBtn.Text = "Lưu điểm"
+saveBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+saveBtn.TextColor3 = Color3.new(1,1,1)
+saveBtn.TextScaled = true
+saveBtn.Parent = mainFrame
+local corner4 = Instance.new("UICorner")
+corner4.CornerRadius = UDim.new(0, 6)
+corner4.Parent = saveBtn
 
--- Hủy sự kiện kéo của mainFrame (nếu đã gán) và gán lại cho titleBar
--- Cách đơn giản: tạo hàm kéo cho một đối tượng và áp dụng cho titleBar, nhưng vị trí cập nhật cho mainFrame.
--- Tôi viết lại hàm kéo chuyên dụng cho titleBar:
+-- Nút "Xóa điểm đã chọn"
+local delBtn = Instance.new("TextButton")
+delBtn.Size = UDim2.new(0.3, 0, 0, 30)
+delBtn.Position = UDim2.new(0.05, 0, 0.37, 0)
+delBtn.Text = "Xóa chọn"
+delBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+delBtn.TextColor3 = Color3.new(1,1,1)
+delBtn.TextScaled = true
+delBtn.Parent = mainFrame
+local corner5 = Instance.new("UICorner")
+corner5.CornerRadius = UDim.new(0, 6)
+corner5.Parent = delBtn
 
-local function makeTitleDraggable(titleBarObj, targetFrame)
-    local dragging = false
-    local dragStart = nil
-    local startPos = nil
-    
-    titleBarObj.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = true
-            dragStart = input.Position
-            startPos = targetFrame.Position
-        end
-    end)
-    
-    titleBarObj.InputChanged:Connect(function(input)
-        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            local delta = input.Position - dragStart
-            local newX = startPos.X.Offset + delta.X
-            local newY = startPos.Y.Offset + delta.Y
-            -- giới hạn (tuỳ chọn)
-            local screenSize = player:GetMouse().ViewSizeX -- hoặc dùng Camera
-            -- Không giới hạn để đơn giản, hoặc có thể clamp
-            targetFrame.Position = UDim2.new(0, newX, 0, newY)
-        end
-    end)
-    
-    titleBarObj.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragging = false
-        end
-    end)
-end
+-- Nút "Teleport đến điểm đã chọn"
+local tpBtn = Instance.new("TextButton")
+tpBtn.Size = UDim2.new(0.3, 0, 0, 30)
+tpBtn.Position = UDim2.new(0.4, 0, 0.37, 0)
+tpBtn.Text = "Teleport"
+tpBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
+tpBtn.TextColor3 = Color3.new(1,1,1)
+tpBtn.TextScaled = true
+tpBtn.Parent = mainFrame
+local corner6 = Instance.new("UICorner")
+corner6.CornerRadius = UDim.new(0, 6)
+corner6.Parent = tpBtn
 
--- Áp dụng kéo cho titleBar để kéo mainFrame
-makeTitleDraggable(titleBar, mainFrame)
+-- Nút "Copy tọa độ"
+local copyBtn = Instance.new("TextButton")
+copyBtn.Size = UDim2.new(0.25, 0, 0, 30)
+copyBtn.Position = UDim2.new(0.75, 0, 0.37, 0)
+copyBtn.Text = "Copy"
+copyBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 200)
+copyBtn.TextColor3 = Color3.new(1,1,1)
+copyBtn.TextScaled = true
+copyBtn.Parent = mainFrame
+local corner7 = Instance.new("UICorner")
+corner7.CornerRadius = UDim.new(0, 6)
+corner7.Parent = copyBtn
 
--- (Tùy chọn) Nếu muốn kéo toàn bộ mainFrame thì vẫn giữ, nhưng thường thì chỉ kéo thanh tiêu đề.
+-- Nút "Clear" (xóa tất cả điểm)
+local clearBtn = Instance.new("TextButton")
+clearBtn.Size = UDim2.new(0.2, 0, 0, 30)
+clearBtn.Position = UDim2.new(0.05, 0, 0.50, 0)
+clearBtn.Text = "Clear All"
+clearBtn.BackgroundColor3 = Color3.fromRGB(150, 150, 150)
+clearBtn.TextColor3 = Color3.new(1,1,1)
+clearBtn.TextScaled = true
+clearBtn.Parent = mainFrame
+local corner8 = Instance.new("UICorner")
+corner8.CornerRadius = UDim.new(0, 6)
+corner8.Parent = clearBtn
 
--- ====== 3. NỘI DUNG UI (ví dụ) ======
-local content = Instance.new("TextLabel")
-content.Size = UDim2.new(1, -20, 1, -50)
-content.Position = UDim2.new(0, 10, 0, 40)
-content.BackgroundTransparency = 1
-content.Text = "Đây là UI chính.\nBạn có thể thêm các nút, danh sách,..."
-content.TextColor3 = Color3.new(1,1,1)
-content.TextWrapped = true
-content.TextScaled = true
-content.Font = Enum.Font.SourceSans
-content.Parent = mainFrame
+-- Danh sách các điểm (ScrollingFrame)
+local listFrame = Instance.new("ScrollingFrame")
+listFrame.Size = UDim2.new(0.9, 0, 0.35, 0)
+listFrame.Position = UDim2.new(0.05, 0, 0.58, 0)
+listFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+listFrame.BorderSizePixel = 1
+listFrame.BorderColor3 = Color3.fromRGB(100,100,100)
+listFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+listFrame.ScrollBarThickness = 6
+listFrame.Parent = mainFrame
+local corner9 = Instance.new("UICorner")
+corner9.CornerRadius = UDim.new(0, 8)
+corner9.Parent = listFrame
 
--- ====== 4. SỰ KIỆN MỞ UI KHI CLICK VÀO NÚT KÉO ======
-dragButton.MouseButton1Click:Connect(function()
-    mainFrame.Visible = not mainFrame.Visible
-    -- Đưa lên trước
-    if mainFrame.Visible then
-        mainFrame.Parent = mainGui -- giữ nguyên
-    end
-end)
+-- Layout cho danh sách
+local layout = Instance.new("UIListLayout")
+layout.SortOrder = Enum.SortOrder.LayoutOrder
+layout.Padding = UDim.new(0, 4)
+layout.Parent = listFrame
 
--- ====== 5. ĐẢM BẢO KÉO NÚT VẪN HOẠT ĐỘNG MƯỢT ======
--- Đã có makeDraggable cho dragButton, nhưng lưu ý xung đột với sự kiện click mở UI.
--- Kéo và click là hai hành động khác nhau, nhưng nếu kéo mà vẫn kích hoạt click thì gây phiền.
--- Giải pháp: phân biệt bằng khoảng cách di chuyển.
--- Tôi sẽ điều chỉnh lại makeDraggable để trả về biến đã kéo hay chưa.
+-- Nút toggle (mở/đóng GUI) - floating button
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.Size = UDim2.new(0, 50, 0, 50)
+toggleBtn.Position = UDim2.new(0.9, -60, 0.1, 10)
+toggleBtn.Text = "+"
+toggleBtn.TextScaled = true
+toggleBtn.BackgroundColor3 = Color3.fromRGB(30, 144, 255)
+toggleBtn.TextColor3 = Color3.new(1,1,1)
+toggleBtn.BackgroundTransparency = 0.1
+toggleBtn.Parent = gui
+local corner10 = Instance.new("UICorner")
+corner10.CornerRadius = UDim.new(1, 0)
+corner10.Parent = toggleBtn
 
--- Cải tiến: thêm biến đếm để nếu đã kéo thì không kích hoạt click.
--- Nhưng vì đơn giản, tôi dùng cách: khi nhấn xuống và nhả ra nếu vị trí thay đổi ít hơn 5px thì coi là click.
--- Tôi sẽ viết lại dragButton xử lý riêng:
-
-local isDragging = false
-local downPos = nil
-
-dragButton.InputBegan:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        downPos = input.Position
-        isDragging = false
-    end
-end)
-
-dragButton.InputChanged:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
-        if downPos and (input.Position - downPos).Magnitude > 8 then
-            isDragging = true
-        end
-    end
-end)
-
--- Gán sự kiện click (thay vì MouseButton1Click trực tiếp)
-dragButton.InputEnded:Connect(function(input)
-    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-        if not isDragging and downPos and (input.Position - downPos).Magnitude < 10 then
-            -- Đây là click thực sự
-            mainFrame.Visible = not mainFrame.Visible
-        end
-        downPos = nil
-    end
-end)
-
--- Vẫn cần chức năng kéo cho dragButton, nhưng đã có makeDraggable ở trên.
--- Tuy nhiên makeDraggable đang dùng InputBegan/Changed/Ended, có thể gây xung đột.
--- Tôi sẽ gộp: sử dụng cùng một bộ sự kiện.
-
--- Cách tối ưu: viết lại toàn bộ kéo + click cho dragButton.
--- Nhưng để tiết kiệm, tôi sẽ xóa makeDraggable cũ và viết mới:
-
--- Xóa sự kiện cũ (không thể xóa dễ, nên tôi sẽ comment và tạo mới)
-
--- Tôi sẽ tạo một hàm kéo mới kết hợp click:
-local function makeFloatingButton(button, onClick)
+-- Làm cho toggleBtn kéo được (có xử lý click)
+local function makeDraggableWithClick(button, onClick)
     local dragActive = false
     local startMouse = nil
     local startPos = nil
@@ -273,18 +199,178 @@ local function makeFloatingButton(button, onClick)
                 onClick()
             end
             dragActive = false
-            startMouse = nil
-            startPos = nil
         end
     end)
 end
 
--- Áp dụng cho dragButton
-makeFloatingButton(dragButton, function()
+-- Hàm toggle
+local function toggleGUI()
     mainFrame.Visible = not mainFrame.Visible
+    if mainFrame.Visible then
+        toggleBtn.Text = "-"
+    else
+        toggleBtn.Text = "+"
+    end
+end
+
+makeDraggableWithClick(toggleBtn, toggleGUI)
+
+-- Lưu trữ điểm
+local points = {} -- { [name] = Vector3 }
+local selectedPoint = nil
+
+-- Hàm cập nhật danh sách hiển thị
+local function refreshList()
+    -- Xóa các button con cũ (chỉ xóa TextButton)
+    for _, child in ipairs(listFrame:GetChildren()) do
+        if child:IsA("TextButton") then
+            child:Destroy()
+        end
+    end
+    
+    for name, pos in pairs(points) do
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(1, -10, 0, 25)
+        btn.Text = name .. " - " .. string.format("%.2f, %.2f, %.2f", pos.X, pos.Y, pos.Z)
+        btn.BackgroundColor3 = Color3.fromRGB(60,60,70)
+        btn.TextColor3 = Color3.new(1,1,1)
+        btn.TextXAlignment = Enum.TextXAlignment.Left
+        btn.TextScaled = true
+        btn.BorderSizePixel = 1
+        btn.BorderColor3 = Color3.fromRGB(100,100,100)
+        btn.Parent = listFrame
+        
+        -- Khi click vào tên thì chọn điểm đó
+        btn.MouseButton1Click:Connect(function()
+            selectedPoint = name
+            -- Đổi màu các button
+            for _, b in ipairs(listFrame:GetChildren()) do
+                if b:IsA("TextButton") then
+                    b.BackgroundColor3 = Color3.fromRGB(60,60,70)
+                end
+            end
+            btn.BackgroundColor3 = Color3.fromRGB(0, 120, 0)
+        end)
+    end
+    
+    -- Cập nhật canvas size
+    local count = #points
+    listFrame.CanvasSize = UDim2.new(0, 0, 0, count * 30 + 10)
+end
+
+-- Hàm lấy tọa độ nhân vật
+local function getCharacterPosition()
+    local char = player.Character
+    if not char then return nil end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    if root then
+        return root.Position
+    end
+    return nil
+end
+
+-- Cập nhật tọa độ hiển thị (gọi liên tục)
+local function updateCoordDisplay()
+    local pos = getCharacterPosition()
+    if pos then
+        coordBox.Text = string.format("Coordinates: X: %.2f | Y: %.2f | Z: %.2f", pos.X, pos.Y, pos.Z)
+    else
+        coordBox.Text = "Coordinates: Waiting for character..."
+    end
+end
+
+-- Vòng lặp cập nhật tọa độ (mỗi 0.2s)
+coroutine.wrap(function()
+    while wait(0.2) do
+        updateCoordDisplay()
+    end
+end)()
+
+-- Sự kiện các nút
+
+-- Lưu điểm hiện tại
+saveBtn.MouseButton1Click:Connect(function()
+    local name = nameBox.Text
+    if name == "" then
+        coordBox.Text = "Vui lòng nhập tên điểm!"
+        return
+    end
+    local pos = getCharacterPosition()
+    if not pos then
+        coordBox.Text = "Không tìm thấy nhân vật!"
+        return
+    end
+    if points[name] then
+        coordBox.Text = "Tên đã tồn tại! Hãy đổi tên khác."
+        return
+    end
+    points[name] = pos
+    refreshList()
+    nameBox.Text = ""
+    coordBox.Text = "Đã lưu điểm: " .. name
 end)
 
--- Còn mainFrame và titleBar kéo: vẫn giữ makeTitleDraggable như trên (hoạt động tốt)
+-- Xóa điểm đã chọn
+delBtn.MouseButton1Click:Connect(function()
+    if selectedPoint and points[selectedPoint] then
+        points[selectedPoint] = nil
+        selectedPoint = nil
+        refreshList()
+        coordBox.Text = "Đã xóa điểm."
+    else
+        coordBox.Text = "Chưa chọn điểm nào để xóa."
+    end
+end)
 
--- ====== KẾT THÚC ======
-print("readytp!")
+-- Teleport đến điểm đã chọn
+tpBtn.MouseButton1Click:Connect(function()
+    if selectedPoint and points[selectedPoint] then
+        local pos = points[selectedPoint]
+        local char = player.Character
+        if char then
+            local root = char:FindFirstChild("HumanoidRootPart")
+            if root then
+                root.CFrame = CFrame.new(pos)
+                coordBox.Text = "Đã teleport đến: " .. selectedPoint
+            else
+                coordBox.Text = "Không tìm thấy HumanoidRootPart."
+            end
+        else
+            coordBox.Text = "Nhân vật chưa xuất hiện."
+        end
+    else
+        coordBox.Text = "Chưa chọn điểm hoặc điểm không tồn tại."
+    end
+end)
+
+-- Copy tọa độ hiện tại vào clipboard
+copyBtn.MouseButton1Click:Connect(function()
+    local pos = getCharacterPosition()
+    if pos then
+        local str = string.format("X: %.2f | Y: %.2f | Z: %.2f", pos.X, pos.Y, pos.Z)
+        if setclipboard then
+            setclipboard(str)
+            coordBox.Text = "Đã copy: " .. str
+        else
+            coordBox.Text = "Không hỗ trợ setclipboard."
+        end
+    else
+        coordBox.Text = "Không có tọa độ để copy."
+    end
+end)
+
+-- Clear all
+clearBtn.MouseButton1Click:Connect(function()
+    points = {}
+    selectedPoint = nil
+    refreshList()
+    coordBox.Text = "Đã xóa tất cả điểm."
+end)
+
+-- Khởi tạo danh sách lúc đầu
+refreshList()
+updateCoordDisplay()
+
+-- Lưu ý: Bạn có thể thêm chức năng lưu trữ vĩnh viễn bằng DataStore nếu muốn (cần RemoteEvent).
+
+print("Hệ thống đa điểm đã sẵn sàng!")
