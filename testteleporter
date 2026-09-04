@@ -1,26 +1,206 @@
--- ====== RAYFIELD FIX LỖI SETVALUE & HIỂN THỊ ĐIỂM ======
--- LocalScript - dán toàn bộ
+-- ====== UI RIÊNG (KHÔNG DÙNG RAYFIELD) - FIX LỖI HIỂN THỊ DANH SÁCH ======
+-- LocalScript (đặt trong StarterPlayerScripts hoặc StarterGui)
+-- Copy toàn bộ
 
-local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
+local player = game.Players.LocalPlayer
 
-local Window = Rayfield:CreateWindow({
-    Name = "Teleporter Pro tokai",
-    LoadingTitle = "Đang tải...",
-    LoadingSubtitle = "by LongTokai",
-    ConfigurationSaving = { Enabled = false },
-    Discord = { Enabled = false },
-    KeySystem = false
-})
+-- Tạo GUI
+local gui = Instance.new("ScreenGui")
+gui.Name = "TeleporterGUI"
+gui.Parent = player:WaitForChild("PlayerGui")
 
-local MainTab = Window:CreateTab("Teleport", 4483362458)
+-- ====== NÚT TOGGLE (MỞ/ĐÓNG) ======
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.Size = UDim2.new(0, 50, 0, 50)
+toggleBtn.Position = UDim2.new(0.9, -60, 0.1, 10)
+toggleBtn.Text = "+"
+toggleBtn.TextScaled = true
+toggleBtn.BackgroundColor3 = Color3.fromRGB(30, 144, 255)
+toggleBtn.TextColor3 = Color3.new(1,1,1)
+toggleBtn.BackgroundTransparency = 0.1
+toggleBtn.Parent = gui
+local cornerTog = Instance.new("UICorner")
+cornerTog.CornerRadius = UDim.new(1, 0)
+cornerTog.Parent = toggleBtn
 
--- Lưu trữ
+-- ====== FRAME CHÍNH (CÓ THỂ KÉO) ======
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 450, 0, 420)
+mainFrame.Position = UDim2.new(0.5, -225, 0.5, -210)
+mainFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+mainFrame.BackgroundTransparency = 0.15
+mainFrame.Active = true
+mainFrame.Draggable = true
+mainFrame.BorderSizePixel = 2
+mainFrame.BorderColor3 = Color3.new(1,1,1)
+mainFrame.Visible = false
+mainFrame.Parent = gui
+local cornerMain = Instance.new("UICorner")
+cornerMain.CornerRadius = UDim.new(0, 12)
+cornerMain.Parent = mainFrame
+
+-- Thanh tiêu đề + nút đóng
+local titleBar = Instance.new("Frame")
+titleBar.Size = UDim2.new(1, 0, 0, 30)
+titleBar.BackgroundTransparency = 1
+titleBar.Parent = mainFrame
+
+local titleText = Instance.new("TextLabel")
+titleText.Size = UDim2.new(1, -40, 1, 0)
+titleText.Position = UDim2.new(0, 10, 0, 0)
+titleText.BackgroundTransparency = 1
+titleText.Text = "TELEPORTER PRO"
+titleText.TextColor3 = Color3.new(1,1,1)
+titleText.TextXAlignment = Enum.TextXAlignment.Left
+titleText.TextScaled = true
+titleText.Font = Enum.Font.SourceSansBold
+titleText.Parent = titleBar
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 30, 1, 0)
+closeBtn.Position = UDim2.new(1, -30, 0, 0)
+closeBtn.Text = "X"
+closeBtn.TextColor3 = Color3.new(1,1,1)
+closeBtn.BackgroundTransparency = 1
+closeBtn.TextScaled = true
+closeBtn.Font = Enum.Font.SourceSansBold
+closeBtn.Parent = titleBar
+closeBtn.MouseButton1Click:Connect(function()
+    mainFrame.Visible = false
+    toggleBtn.Text = "+"
+end)
+
+-- ====== CÁC THÀNH PHẦN ======
+-- Ô hiển thị tọa độ (chỉ đọc)
+local coordBox = Instance.new("TextBox")
+coordBox.Size = UDim2.new(0.9, 0, 0, 40)
+coordBox.Position = UDim2.new(0.05, 0, 0.1, 0)
+coordBox.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+coordBox.Text = "Coordinates: "
+coordBox.TextColor3 = Color3.new(1,1,1)
+coordBox.TextScaled = true
+coordBox.ClearTextOnFocus = false
+coordBox.TextEditable = false
+coordBox.Parent = mainFrame
+local cCorner = Instance.new("UICorner")
+cCorner.CornerRadius = UDim.new(0, 8)
+cCorner.Parent = coordBox
+
+-- Ô nhập tên
+local nameBox = Instance.new("TextBox")
+nameBox.Size = UDim2.new(0.5, 0, 0, 30)
+nameBox.Position = UDim2.new(0.05, 0, 0.22, 0)
+nameBox.PlaceholderText = "Tên điểm"
+nameBox.BackgroundColor3 = Color3.fromRGB(50,50,60)
+nameBox.TextColor3 = Color3.new(1,1,1)
+nameBox.TextScaled = true
+nameBox.ClearTextOnFocus = true
+nameBox.Parent = mainFrame
+local nCorner = Instance.new("UICorner")
+nCorner.CornerRadius = UDim.new(0, 6)
+nCorner.Parent = nameBox
+
+-- Nút lưu
+local saveBtn = Instance.new("TextButton")
+saveBtn.Size = UDim2.new(0.35, 0, 0, 30)
+saveBtn.Position = UDim2.new(0.6, 0, 0.22, 0)
+saveBtn.Text = "Lưu điểm"
+saveBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 0)
+saveBtn.TextColor3 = Color3.new(1,1,1)
+saveBtn.TextScaled = true
+saveBtn.Parent = mainFrame
+local sCorner = Instance.new("UICorner")
+sCorner.CornerRadius = UDim.new(0, 6)
+sCorner.Parent = saveBtn
+
+-- Nút xóa điểm chọn
+local delBtn = Instance.new("TextButton")
+delBtn.Size = UDim2.new(0.28, 0, 0, 30)
+delBtn.Position = UDim2.new(0.05, 0, 0.33, 0)
+delBtn.Text = "Xóa chọn"
+delBtn.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+delBtn.TextColor3 = Color3.new(1,1,1)
+delBtn.TextScaled = true
+delBtn.Parent = mainFrame
+local dCorner = Instance.new("UICorner")
+dCorner.CornerRadius = UDim.new(0, 6)
+dCorner.Parent = delBtn
+
+-- Nút teleport
+local tpBtn = Instance.new("TextButton")
+tpBtn.Size = UDim2.new(0.28, 0, 0, 30)
+tpBtn.Position = UDim2.new(0.37, 0, 0.33, 0)
+tpBtn.Text = "Teleport"
+tpBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 200)
+tpBtn.TextColor3 = Color3.new(1,1,1)
+tpBtn.TextScaled = true
+tpBtn.Parent = mainFrame
+local tCorner = Instance.new("UICorner")
+tCorner.CornerRadius = UDim.new(0, 6)
+tCorner.Parent = tpBtn
+
+-- Nút copy
+local copyBtn = Instance.new("TextButton")
+copyBtn.Size = UDim2.new(0.22, 0, 0, 30)
+copyBtn.Position = UDim2.new(0.7, 0, 0.33, 0)
+copyBtn.Text = "Copy"
+copyBtn.BackgroundColor3 = Color3.fromRGB(100, 100, 200)
+copyBtn.TextColor3 = Color3.new(1,1,1)
+copyBtn.TextScaled = true
+copyBtn.Parent = mainFrame
+local c2Corner = Instance.new("UICorner")
+c2Corner.CornerRadius = UDim.new(0, 6)
+c2Corner.Parent = copyBtn
+
+-- Nút clear all
+local clearBtn = Instance.new("TextButton")
+clearBtn.Size = UDim2.new(0.2, 0, 0, 25)
+clearBtn.Position = UDim2.new(0.75, 0, 0.45, 0)
+clearBtn.Text = "Clear All"
+clearBtn.BackgroundColor3 = Color3.fromRGB(150, 150, 150)
+clearBtn.TextColor3 = Color3.new(1,1,1)
+clearBtn.TextScaled = true
+clearBtn.Parent = mainFrame
+local clCorner = Instance.new("UICorner")
+clCorner.CornerRadius = UDim.new(0, 6)
+clCorner.Parent = clearBtn
+
+-- Label số lượng điểm
+local countLabel = Instance.new("TextLabel")
+countLabel.Size = UDim2.new(0.4, 0, 0, 25)
+countLabel.Position = UDim2.new(0.05, 0, 0.45, 0)
+countLabel.BackgroundTransparency = 1
+countLabel.Text = "Điểm: 0"
+countLabel.TextColor3 = Color3.new(1,1,1)
+countLabel.TextScaled = true
+countLabel.TextXAlignment = Enum.TextXAlignment.Left
+countLabel.Parent = mainFrame
+
+-- Khung danh sách (ScrollingFrame)
+local listFrame = Instance.new("ScrollingFrame")
+listFrame.Size = UDim2.new(0.9, 0, 0.4, 0)
+listFrame.Position = UDim2.new(0.05, 0, 0.54, 0)
+listFrame.BackgroundColor3 = Color3.fromRGB(30, 30, 40)
+listFrame.BorderSizePixel = 1
+listFrame.BorderColor3 = Color3.fromRGB(100,100,100)
+listFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+listFrame.ScrollBarThickness = 6
+listFrame.Parent = mainFrame
+local lCorner = Instance.new("UICorner")
+lCorner.CornerRadius = UDim.new(0, 8)
+lCorner.Parent = listFrame
+
+local layout = Instance.new("UIListLayout")
+layout.SortOrder = Enum.SortOrder.LayoutOrder
+layout.Padding = UDim.new(0, 4)
+layout.Parent = listFrame
+
+-- ====== LOGIC ======
 local points = {}
 local selectedPoint = nil
 
--- Hàm lấy root
 local function getRootPart()
-    local char = game.Players.LocalPlayer.Character
+    local char = player.Character
     if not char then return nil end
     return char:FindFirstChild("HumanoidRootPart")
 end
@@ -30,175 +210,151 @@ local function getCurrentPosition()
     return root and root.Position or nil
 end
 
--- Label tọa độ
-local coordLabel = MainTab:CreateLabel("⏳ Đang lấy tọa độ...")
+-- Cập nhật tọa độ real-time
 coroutine.wrap(function()
     while true do
         task.wait(0.2)
         local pos = getCurrentPosition()
         if pos then
-            coordLabel:Set(string.format("📍 X: %.2f | Y: %.2f | Z: %.2f", pos.X, pos.Y, pos.Z))
+            coordBox.Text = string.format("📍 X: %.2f | Y: %.2f | Z: %.2f", pos.X, pos.Y, pos.Z)
         else
-            coordLabel:Set("⏳ Chờ nhân vật...")
+            coordBox.Text = "⏳ Chờ nhân vật..."
         end
     end
 end)()
 
-local countLabel = MainTab:CreateLabel("📦 Số điểm: 0")
-
--- Phần lưu điểm
-MainTab:CreateSection("📌 Lưu điểm mới")
-local nameInput = MainTab:CreateInput({
-    Name = "Tên điểm",
-    PlaceholderText = "Nhập tên",
-    RemoveTextAfterFocusLost = false,
-    Callback = function() end
-})
-
--- Dropdown (tạo sau)
-local pointDropdown = nil
-
--- Hàm refresh (dùng method Set để cập nhật options)
-local function refreshPointList()
+-- Làm mới danh sách
+local function refreshList()
+    -- Xóa các button cũ (chỉ xóa TextButton)
+    for _, child in ipairs(listFrame:GetChildren()) do
+        if child:IsA("TextButton") then
+            child:Destroy()
+        end
+    end
+    
     local names = {}
     for name, _ in pairs(points) do
         table.insert(names, name)
     end
-    countLabel:Set("📦 Số điểm: " .. #names)
+    countLabel.Text = "Điểm: " .. #names
     
-    print("=== REFRESH ===")
-    print("Points:", points)
-    print("Names:", table.concat(names, ", "))
-    
-    if #names == 0 then
-        table.insert(names, "(không có điểm)")
+    -- Hiển thị từng điểm
+    for _, name in ipairs(names) do
+        local pos = points[name]
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(1, -10, 0, 25)
+        btn.Text = name .. " - " .. string.format("%.2f, %.2f, %.2f", pos.X, pos.Y, pos.Z)
+        btn.BackgroundColor3 = Color3.fromRGB(60,60,70)
+        btn.TextColor3 = Color3.new(1,1,1)
+        btn.TextXAlignment = Enum.TextXAlignment.Left
+        btn.TextScaled = true
+        btn.BorderSizePixel = 1
+        btn.BorderColor3 = Color3.fromRGB(100,100,100)
+        btn.Parent = listFrame
+        
+        btn.MouseButton1Click:Connect(function()
+            selectedPoint = name
+            -- Đổi màu các button
+            for _, b in ipairs(listFrame:GetChildren()) do
+                if b:IsA("TextButton") then
+                    b.BackgroundColor3 = Color3.fromRGB(60,60,70)
+                end
+            end
+            btn.BackgroundColor3 = Color3.fromRGB(0, 120, 0)
+        end)
     end
     
-    if pointDropdown then
-        -- Cập nhật danh sách options bằng Set (không dùng SetValue)
-        pointDropdown:Set(names)
-        -- Chọn item đầu tiên nếu có điểm thực
-        if #names > 0 and names[1] ~= "(không có điểm)" then
-            pointDropdown:SetOption(names[1]) -- SetOption để chọn
-            selectedPoint = names[1]
-        else
-            pointDropdown:SetOption("(không có điểm)")
-            selectedPoint = nil
-        end
+    -- Cập nhật kích thước canvas
+    listFrame.CanvasSize = UDim2.new(0, 0, 0, #names * 30 + 10)
+end
+
+-- Sự kiện toggle
+local function toggleUI()
+    mainFrame.Visible = not mainFrame.Visible
+    toggleBtn.Text = mainFrame.Visible and "-" or "+"
+    if mainFrame.Visible then
+        refreshList()
     end
 end
 
--- Nút lưu
-MainTab:CreateButton({
-    Name = "✅ Lưu điểm hiện tại",
-    Callback = function()
-        local name = nameInput.CurrentValue
-        if name == "" or name == nil then
-            Rayfield:Notify({ Title = "Lỗi", Content = "Nhập tên!", Duration = 3 })
-            return
-        end
-        local pos = getCurrentPosition()
-        if not pos then
-            Rayfield:Notify({ Title = "Lỗi", Content = "Không có nhân vật!", Duration = 3 })
-            return
-        end
-        if points[name] then
-            Rayfield:Notify({ Title = "Trùng tên", Content = "Điểm '"..name.."' đã tồn tại!", Duration = 3 })
-            return
-        end
-        points[name] = pos
-        print("Đã lưu:", name, pos)
-        refreshPointList()
-        nameInput:Set("")
-        Rayfield:Notify({ Title = "Thành công", Content = "Đã lưu '"..name.."'", Duration = 2 })
-    end
-})
+toggleBtn.MouseButton1Click:Connect(toggleUI)
 
--- Danh sách
-MainTab:CreateSection("📋 Danh sách điểm")
-pointDropdown = MainTab:CreateDropdown({
-    Name = "Chọn điểm",
-    Options = {"(không có điểm)"},
-    CurrentOption = "(không có điểm)",
-    Callback = function(option)
-        if option ~= "(không có điểm)" then
-            selectedPoint = option
-            print("Đã chọn:", option)
-        else
-            selectedPoint = nil
-        end
+-- Lưu điểm
+saveBtn.MouseButton1Click:Connect(function()
+    local name = nameBox.Text
+    if name == "" then
+        coordBox.Text = "⚠️ Nhập tên!"
+        return
     end
-})
-
--- Teleport
-MainTab:CreateButton({
-    Name = "🚀 Teleport",
-    Callback = function()
-        if not selectedPoint or not points[selectedPoint] then
-            Rayfield:Notify({ Title = "Lỗi", Content = "Chọn điểm hợp lệ!", Duration = 3 })
-            return
-        end
-        local pos = points[selectedPoint]
-        local root = getRootPart()
-        if not root then
-            Rayfield:Notify({ Title = "Lỗi", Content = "Không có nhân vật!", Duration = 3 })
-            return
-        end
-        root.CFrame = CFrame.new(pos)
-        Rayfield:Notify({ Title = "Teleport", Content = "Đã đến '"..selectedPoint.."'", Duration = 2 })
+    local pos = getCurrentPosition()
+    if not pos then
+        coordBox.Text = "⚠️ Không có nhân vật!"
+        return
     end
-})
+    if points[name] then
+        coordBox.Text = "⚠️ Tên đã tồn tại!"
+        return
+    end
+    points[name] = pos
+    refreshList()
+    nameBox.Text = ""
+    coordBox.Text = "✅ Đã lưu '" .. name .. "'"
+end)
 
--- Xóa
-MainTab:CreateButton({
-    Name = "🗑️ Xóa",
-    Callback = function()
-        if not selectedPoint or not points[selectedPoint] then
-            Rayfield:Notify({ Title = "Lỗi", Content = "Chọn điểm để xóa!", Duration = 3 })
-            return
-        end
+-- Xóa điểm chọn
+delBtn.MouseButton1Click:Connect(function()
+    if selectedPoint and points[selectedPoint] then
         points[selectedPoint] = nil
         selectedPoint = nil
-        refreshPointList()
-        Rayfield:Notify({ Title = "Đã xóa", Content = "Điểm đã xóa.", Duration = 2 })
+        refreshList()
+        coordBox.Text = "🗑️ Đã xóa điểm."
+    else
+        coordBox.Text = "⚠️ Chưa chọn điểm!"
     end
-})
+end)
 
--- Tiện ích
-MainTab:CreateSection("📋 Tiện ích")
-MainTab:CreateButton({
-    Name = "📄 Copy tọa độ",
-    Callback = function()
-        local pos = getCurrentPosition()
-        if not pos then
-            Rayfield:Notify({ Title = "Lỗi", Content = "Không có tọa độ!", Duration = 3 })
-            return
+-- Teleport
+tpBtn.MouseButton1Click:Connect(function()
+    if selectedPoint and points[selectedPoint] then
+        local pos = points[selectedPoint]
+        local root = getRootPart()
+        if root then
+            root.CFrame = CFrame.new(pos)
+            coordBox.Text = "🚀 Teleport đến '" .. selectedPoint .. "'"
+        else
+            coordBox.Text = "⚠️ Không có nhân vật!"
         end
+    else
+        coordBox.Text = "⚠️ Chọn điểm trước!"
+    end
+end)
+
+-- Copy
+copyBtn.MouseButton1Click:Connect(function()
+    local pos = getCurrentPosition()
+    if pos then
         local str = string.format("X: %.2f | Y: %.2f | Z: %.2f", pos.X, pos.Y, pos.Z)
         if setclipboard then
             setclipboard(str)
-            Rayfield:Notify({ Title = "Copied", Content = str, Duration = 3 })
+            coordBox.Text = "📋 Đã copy: " .. str
         else
-            Rayfield:Notify({ Title = "Lỗi", Content = "Clipboard không hỗ trợ.", Duration = 3 })
+            coordBox.Text = "⚠️ Không hỗ trợ clipboard."
         end
+    else
+        coordBox.Text = "⚠️ Không có tọa độ!"
     end
-})
+end)
 
-MainTab:CreateButton({
-    Name = "🧹 Xóa tất cả",
-    Callback = function()
-        points = {}
-        selectedPoint = nil
-        refreshPointList()
-        Rayfield:Notify({ Title = "Đã xóa hết", Content = "Tất cả điểm đã bị xóa.", Duration = 2 })
-    end
-})
+-- Clear all
+clearBtn.MouseButton1Click:Connect(function()
+    points = {}
+    selectedPoint = nil
+    refreshList()
+    coordBox.Text = "🧹 Đã xóa tất cả."
+end)
 
--- Khởi tạo
-refreshPointList()
+-- Khởi tạo lần đầu
+refreshList()
+coordBox.Text = "✅ Sẵn sàng! Nhấn '+' để mở UI."
 
-Rayfield:Notify({
-    Title = "✅ Teleporter Pro tokai",
-    Content = "Phím K mở/đóng.",
-    Duration = 5
-})
+print("Teleporter UI riêng đã chạy thành công!")
