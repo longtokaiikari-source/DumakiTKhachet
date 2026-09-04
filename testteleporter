@@ -1,13 +1,12 @@
--- ====== SCRIPT RAYFIELD FIX LỖI KHÔNG HIỂN THỊ ĐIỂM ĐÃ LƯU ======
--- LocalScript (đặt trong StarterPlayerScripts hoặc StarterGui)
--- Copy toàn bộ và dán vào file .lua
+-- ====== RAYFIELD FIX LỖI SETVALUE & HIỂN THỊ ĐIỂM ======
+-- LocalScript - dán toàn bộ
 
 local Rayfield = loadstring(game:HttpGet('https://sirius.menu/rayfield'))()
 
 local Window = Rayfield:CreateWindow({
     Name = "Teleporter Pro tokai",
     LoadingTitle = "Đang tải...",
-    LoadingSubtitle = "by LongTokai)",
+    LoadingSubtitle = "by LongTokai",
     ConfigurationSaving = { Enabled = false },
     Discord = { Enabled = false },
     KeySystem = false
@@ -16,7 +15,7 @@ local Window = Rayfield:CreateWindow({
 local MainTab = Window:CreateTab("Teleport", 4483362458)
 
 -- Lưu trữ
-local points = {}          -- key = tên, value = Vector3
+local points = {}
 local selectedPoint = nil
 
 -- Hàm lấy root
@@ -31,9 +30,8 @@ local function getCurrentPosition()
     return root and root.Position or nil
 end
 
--- Label hiển thị tọa độ real-time
+-- Label tọa độ
 local coordLabel = MainTab:CreateLabel("⏳ Đang lấy tọa độ...")
-
 coroutine.wrap(function()
     while true do
         task.wait(0.2)
@@ -46,86 +44,78 @@ coroutine.wrap(function()
     end
 end)()
 
--- Label hiển thị số điểm đã lưu (để debug)
-local countLabel = MainTab:CreateLabel("📦 Số điểm đã lưu: 0")
+local countLabel = MainTab:CreateLabel("📦 Số điểm: 0")
 
 -- Phần lưu điểm
 MainTab:CreateSection("📌 Lưu điểm mới")
-
 local nameInput = MainTab:CreateInput({
     Name = "Tên điểm",
-    PlaceholderText = "Nhập tên (vd: Nhà, Cổng...)",
+    PlaceholderText = "Nhập tên",
     RemoveTextAfterFocusLost = false,
     Callback = function() end
 })
 
--- Dropdown danh sách điểm (khai báo trước)
+-- Dropdown (tạo sau)
 local pointDropdown = nil
 
--- Hàm refresh danh sách (có in debug ra console)
+-- Hàm refresh (dùng method Set để cập nhật options)
 local function refreshPointList()
     local names = {}
     for name, _ in pairs(points) do
         table.insert(names, name)
     end
-    -- Cập nhật label số điểm
-    countLabel:Set("📦 Số điểm đã lưu: " .. #names)
+    countLabel:Set("📦 Số điểm: " .. #names)
     
-    -- In ra console để kiểm tra
-    print("=== REFRESH POINT LIST ===")
-    print("Points table:", points)
-    print("Names list:", table.concat(names, ", "))
+    print("=== REFRESH ===")
+    print("Points:", points)
+    print("Names:", table.concat(names, ", "))
     
     if #names == 0 then
         table.insert(names, "(không có điểm)")
     end
     
     if pointDropdown then
+        -- Cập nhật danh sách options bằng Set (không dùng SetValue)
         pointDropdown:Set(names)
-        -- Chọn option đầu tiên nếu có điểm thật
+        -- Chọn item đầu tiên nếu có điểm thực
         if #names > 0 and names[1] ~= "(không có điểm)" then
-            pointDropdown:SetValue(names[1])
+            pointDropdown:SetOption(names[1]) -- SetOption để chọn
             selectedPoint = names[1]
-            print("Selected first:", selectedPoint)
         else
-            pointDropdown:SetValue("(không có điểm)")
+            pointDropdown:SetOption("(không có điểm)")
             selectedPoint = nil
         end
-    else
-        print("WARNING: pointDropdown chưa được khởi tạo!")
     end
 end
 
--- Nút lưu điểm
+-- Nút lưu
 MainTab:CreateButton({
     Name = "✅ Lưu điểm hiện tại",
     Callback = function()
         local name = nameInput.CurrentValue
         if name == "" or name == nil then
-            Rayfield:Notify({ Title = "Lỗi", Content = "Vui lòng nhập tên điểm!", Duration = 3 })
+            Rayfield:Notify({ Title = "Lỗi", Content = "Nhập tên!", Duration = 3 })
             return
         end
         local pos = getCurrentPosition()
         if not pos then
-            Rayfield:Notify({ Title = "Lỗi", Content = "Không tìm thấy nhân vật!", Duration = 3 })
+            Rayfield:Notify({ Title = "Lỗi", Content = "Không có nhân vật!", Duration = 3 })
             return
         end
         if points[name] then
-            Rayfield:Notify({ Title = "Trùng tên", Content = "Điểm '" .. name .. "' đã tồn tại!", Duration = 3 })
+            Rayfield:Notify({ Title = "Trùng tên", Content = "Điểm '"..name.."' đã tồn tại!", Duration = 3 })
             return
         end
         points[name] = pos
-        print("Đã lưu điểm:", name, pos)  -- debug console
+        print("Đã lưu:", name, pos)
         refreshPointList()
         nameInput:Set("")
-        Rayfield:Notify({ Title = "Thành công", Content = "Đã lưu điểm '" .. name .. "'", Duration = 2 })
+        Rayfield:Notify({ Title = "Thành công", Content = "Đã lưu '"..name.."'", Duration = 2 })
     end
 })
 
--- Phần danh sách
+-- Danh sách
 MainTab:CreateSection("📋 Danh sách điểm")
-
--- Tạo dropdown (gán vào biến pointDropdown)
 pointDropdown = MainTab:CreateDropdown({
     Name = "Chọn điểm",
     Options = {"(không có điểm)"},
@@ -140,45 +130,44 @@ pointDropdown = MainTab:CreateDropdown({
     end
 })
 
--- Nút Teleport
+-- Teleport
 MainTab:CreateButton({
-    Name = "🚀 Teleport đến điểm chọn",
+    Name = "🚀 Teleport",
     Callback = function()
         if not selectedPoint or not points[selectedPoint] then
-            Rayfield:Notify({ Title = "Lỗi", Content = "Vui lòng chọn một điểm hợp lệ!", Duration = 3 })
+            Rayfield:Notify({ Title = "Lỗi", Content = "Chọn điểm hợp lệ!", Duration = 3 })
             return
         end
         local pos = points[selectedPoint]
         local root = getRootPart()
         if not root then
-            Rayfield:Notify({ Title = "Lỗi", Content = "Không tìm thấy nhân vật!", Duration = 3 })
+            Rayfield:Notify({ Title = "Lỗi", Content = "Không có nhân vật!", Duration = 3 })
             return
         end
         root.CFrame = CFrame.new(pos)
-        Rayfield:Notify({ Title = "Teleport thành công", Content = "Đã đến '" .. selectedPoint .. "'", Duration = 2 })
+        Rayfield:Notify({ Title = "Teleport", Content = "Đã đến '"..selectedPoint.."'", Duration = 2 })
     end
 })
 
--- Nút Xóa điểm
+-- Xóa
 MainTab:CreateButton({
-    Name = "🗑️ Xóa điểm chọn",
+    Name = "🗑️ Xóa",
     Callback = function()
         if not selectedPoint or not points[selectedPoint] then
-            Rayfield:Notify({ Title = "Lỗi", Content = "Chọn một điểm để xóa!", Duration = 3 })
+            Rayfield:Notify({ Title = "Lỗi", Content = "Chọn điểm để xóa!", Duration = 3 })
             return
         end
         points[selectedPoint] = nil
         selectedPoint = nil
         refreshPointList()
-        Rayfield:Notify({ Title = "Đã xóa", Content = "Điểm đã được xóa.", Duration = 2 })
+        Rayfield:Notify({ Title = "Đã xóa", Content = "Điểm đã xóa.", Duration = 2 })
     end
 })
 
--- Phần tiện ích
-MainTab:CreateSection("📋 Tiện ích khác")
-
+-- Tiện ích
+MainTab:CreateSection("📋 Tiện ích")
 MainTab:CreateButton({
-    Name = "📄 Copy tọa độ hiện tại",
+    Name = "📄 Copy tọa độ",
     Callback = function()
         local pos = getCurrentPosition()
         if not pos then
@@ -188,31 +177,28 @@ MainTab:CreateButton({
         local str = string.format("X: %.2f | Y: %.2f | Z: %.2f", pos.X, pos.Y, pos.Z)
         if setclipboard then
             setclipboard(str)
-            Rayfield:Notify({ Title = "Đã copy", Content = str, Duration = 3 })
+            Rayfield:Notify({ Title = "Copied", Content = str, Duration = 3 })
         else
-            Rayfield:Notify({ Title = "Lỗi", Content = "Không hỗ trợ clipboard.", Duration = 3 })
+            Rayfield:Notify({ Title = "Lỗi", Content = "Clipboard không hỗ trợ.", Duration = 3 })
         end
     end
 })
 
 MainTab:CreateButton({
-    Name = "🧹 Xóa tất cả điểm",
+    Name = "🧹 Xóa tất cả",
     Callback = function()
         points = {}
         selectedPoint = nil
         refreshPointList()
-        Rayfield:Notify({ Title = "Đã xóa", Content = "Tất cả điểm đã bị xóa.", Duration = 2 })
+        Rayfield:Notify({ Title = "Đã xóa hết", Content = "Tất cả điểm đã bị xóa.", Duration = 2 })
     end
 })
 
--- Khởi tạo lần đầu
+-- Khởi tạo
 refreshPointList()
 
--- Thông báo
 Rayfield:Notify({
-    Title = "✅ Teleporter Pro Tokai",
-    Content = "Mở/đóng bằng phím K.",
+    Title = "✅ Teleporter Pro tokai",
+    Content = "Phím K mở/đóng.",
     Duration = 5
 })
-
-print("Script load")
