@@ -1,44 +1,78 @@
--- ====== SCRIPT HOÀN CHỈNH (LocalScript đặt trong StarterGui hoặc StarterPlayerScripts) ======
--- Dựa trên script dump gốc, tôi đã thêm chức năng lưu nhiều điểm tọa độ với tên.
--- Các chức năng: hiển thị tọa độ hiện tại, thêm điểm mới (lấy tên từ input), xóa điểm, teleport đến điểm đã chọn, copy tọa độ, clear.
-
+-- ====== SCRIPT FIX LỖI MẤT UI & BUTTON ======
 local player = game.Players.LocalPlayer
-local mouse = player:GetMouse()
 
--- Tạo GUI chính
+-- Tạo GUI (chỉ 1 lần)
 local gui = Instance.new("ScreenGui")
 gui.Name = "PositionTrackerPlus"
 gui.Parent = player:WaitForChild("PlayerGui")
 
--- Frame chính (có thể kéo)
+-- ====== NÚT TOGGLE (KHÔNG KÉO, CHỈ CLICK) ======
+local toggleBtn = Instance.new("TextButton")
+toggleBtn.Size = UDim2.new(0, 50, 0, 50)
+toggleBtn.Position = UDim2.new(0.9, -60, 0.1, 10)
+toggleBtn.Text = "+"
+toggleBtn.TextScaled = true
+toggleBtn.BackgroundColor3 = Color3.fromRGB(30, 144, 255)
+toggleBtn.TextColor3 = Color3.new(1,1,1)
+toggleBtn.BackgroundTransparency = 0.1
+toggleBtn.Parent = gui
+-- Bo tròn
+local cornerToggle = Instance.new("UICorner")
+cornerToggle.CornerRadius = UDim.new(1, 0)
+cornerToggle.Parent = toggleBtn
+
+-- ====== FRAME CHÍNH (CÓ THỂ KÉO) ======
 local mainFrame = Instance.new("Frame")
 mainFrame.Size = UDim2.new(0, 450, 0, 380)
 mainFrame.Position = UDim2.new(0.5, -225, 0.5, -190)
 mainFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
 mainFrame.BackgroundTransparency = 0.2
 mainFrame.Active = true
-mainFrame.Draggable = true
+mainFrame.Draggable = true        -- Cho phép kéo
 mainFrame.BorderSizePixel = 2
 mainFrame.BorderColor3 = Color3.new(1,1,1)
-mainFrame.Visible = false -- ẩn ban đầu
+mainFrame.Visible = false         -- Ẩn ban đầu
 mainFrame.Parent = gui
 
 -- Bo góc
-local corner = Instance.new("UICorner")
-corner.CornerRadius = UDim.new(0, 12)
-corner.Parent = mainFrame
+local cornerMain = Instance.new("UICorner")
+cornerMain.CornerRadius = UDim.new(0, 12)
+cornerMain.Parent = mainFrame
 
--- Tiêu đề
-local title = Instance.new("TextLabel")
-title.Size = UDim2.new(1, 0, 0, 30)
-title.BackgroundTransparency = 1
-title.Text = "POSITION TRACKER + MULTI-POINT"
-title.TextColor3 = Color3.new(1,1,1)
-title.TextScaled = true
-title.Font = Enum.Font.SourceSansBold
-title.Parent = mainFrame
+-- ====== THANH TIÊU ĐỀ (CÓ NÚT ĐÓNG) ======
+local titleBar = Instance.new("Frame")
+titleBar.Size = UDim2.new(1, 0, 0, 30)
+titleBar.BackgroundTransparency = 1
+titleBar.Parent = mainFrame
 
--- Ô hiển thị tọa độ (TextBox chỉ đọc)
+local titleText = Instance.new("TextLabel")
+titleText.Size = UDim2.new(1, -40, 1, 0)
+titleText.Position = UDim2.new(0, 10, 0, 0)
+titleText.BackgroundTransparency = 1
+titleText.Text = "POSITION TRACKER + MULTI-POINT"
+titleText.TextColor3 = Color3.new(1,1,1)
+titleText.TextXAlignment = Enum.TextXAlignment.Left
+titleText.TextScaled = true
+titleText.Font = Enum.Font.SourceSansBold
+titleText.Parent = titleBar
+
+-- Nút đóng (X)
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 30, 1, 0)
+closeBtn.Position = UDim2.new(1, -30, 0, 0)
+closeBtn.Text = "X"
+closeBtn.TextColor3 = Color3.new(1,1,1)
+closeBtn.BackgroundTransparency = 1
+closeBtn.TextScaled = true
+closeBtn.Font = Enum.Font.SourceSansBold
+closeBtn.Parent = titleBar
+closeBtn.MouseButton1Click:Connect(function()
+    mainFrame.Visible = false
+    toggleBtn.Text = "+"
+end)
+
+-- ====== CÁC THÀNH PHẦN KHÁC (GIỮ NGUYÊN) ======
+-- Ô hiển thị tọa độ
 local coordBox = Instance.new("TextBox")
 coordBox.Size = UDim2.new(0.8, 0, 0, 40)
 coordBox.Position = UDim2.new(0.1, 0, 0.1, 0)
@@ -49,12 +83,11 @@ coordBox.TextScaled = true
 coordBox.ClearTextOnFocus = false
 coordBox.TextEditable = false
 coordBox.Parent = mainFrame
--- Bo góc cho coordBox
 local corner2 = Instance.new("UICorner")
 corner2.CornerRadius = UDim.new(0, 8)
 corner2.Parent = coordBox
 
--- Ô nhập tên điểm mới
+-- Ô nhập tên điểm
 local nameBox = Instance.new("TextBox")
 nameBox.Size = UDim2.new(0.5, 0, 0, 30)
 nameBox.Position = UDim2.new(0.05, 0, 0.25, 0)
@@ -68,7 +101,7 @@ local corner3 = Instance.new("UICorner")
 corner3.CornerRadius = UDim.new(0, 6)
 corner3.Parent = nameBox
 
--- Nút "Lưu điểm hiện tại"
+-- Các nút chức năng
 local saveBtn = Instance.new("TextButton")
 saveBtn.Size = UDim2.new(0.35, 0, 0, 30)
 saveBtn.Position = UDim2.new(0.6, 0, 0.25, 0)
@@ -81,7 +114,6 @@ local corner4 = Instance.new("UICorner")
 corner4.CornerRadius = UDim.new(0, 6)
 corner4.Parent = saveBtn
 
--- Nút "Xóa điểm đã chọn"
 local delBtn = Instance.new("TextButton")
 delBtn.Size = UDim2.new(0.3, 0, 0, 30)
 delBtn.Position = UDim2.new(0.05, 0, 0.37, 0)
@@ -94,7 +126,6 @@ local corner5 = Instance.new("UICorner")
 corner5.CornerRadius = UDim.new(0, 6)
 corner5.Parent = delBtn
 
--- Nút "Teleport đến điểm đã chọn"
 local tpBtn = Instance.new("TextButton")
 tpBtn.Size = UDim2.new(0.3, 0, 0, 30)
 tpBtn.Position = UDim2.new(0.4, 0, 0.37, 0)
@@ -107,7 +138,6 @@ local corner6 = Instance.new("UICorner")
 corner6.CornerRadius = UDim.new(0, 6)
 corner6.Parent = tpBtn
 
--- Nút "Copy tọa độ"
 local copyBtn = Instance.new("TextButton")
 copyBtn.Size = UDim2.new(0.25, 0, 0, 30)
 copyBtn.Position = UDim2.new(0.75, 0, 0.37, 0)
@@ -120,7 +150,6 @@ local corner7 = Instance.new("UICorner")
 corner7.CornerRadius = UDim.new(0, 6)
 corner7.Parent = copyBtn
 
--- Nút "Clear" (xóa tất cả điểm)
 local clearBtn = Instance.new("TextButton")
 clearBtn.Size = UDim2.new(0.2, 0, 0, 30)
 clearBtn.Position = UDim2.new(0.05, 0, 0.50, 0)
@@ -133,7 +162,7 @@ local corner8 = Instance.new("UICorner")
 corner8.CornerRadius = UDim.new(0, 6)
 corner8.Parent = clearBtn
 
--- Danh sách các điểm (ScrollingFrame)
+-- Danh sách điểm
 local listFrame = Instance.new("ScrollingFrame")
 listFrame.Size = UDim2.new(0.9, 0, 0.35, 0)
 listFrame.Position = UDim2.new(0.05, 0, 0.58, 0)
@@ -147,87 +176,35 @@ local corner9 = Instance.new("UICorner")
 corner9.CornerRadius = UDim.new(0, 8)
 corner9.Parent = listFrame
 
--- Layout cho danh sách
 local layout = Instance.new("UIListLayout")
 layout.SortOrder = Enum.SortOrder.LayoutOrder
 layout.Padding = UDim.new(0, 4)
 layout.Parent = listFrame
 
--- Nút toggle (mở/đóng GUI) - floating button
-local toggleBtn = Instance.new("TextButton")
-toggleBtn.Size = UDim2.new(0, 50, 0, 50)
-toggleBtn.Position = UDim2.new(0.9, -60, 0.1, 10)
-toggleBtn.Text = "+"
-toggleBtn.TextScaled = true
-toggleBtn.BackgroundColor3 = Color3.fromRGB(30, 144, 255)
-toggleBtn.TextColor3 = Color3.new(1,1,1)
-toggleBtn.BackgroundTransparency = 0.1
-toggleBtn.Parent = gui
-local corner10 = Instance.new("UICorner")
-corner10.CornerRadius = UDim.new(1, 0)
-corner10.Parent = toggleBtn
-
--- Làm cho toggleBtn kéo được (có xử lý click)
-local function makeDraggableWithClick(button, onClick)
-    local dragActive = false
-    local startMouse = nil
-    local startPos = nil
-    local moved = false
-    
-    button.InputBegan:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            dragActive = true
-            startMouse = input.Position
-            startPos = button.Position
-            moved = false
-        end
-    end)
-    
-    button.InputChanged:Connect(function(input)
-        if dragActive and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
-            local delta = input.Position - startMouse
-            if delta.Magnitude > 5 then moved = true end
-            local newX = startPos.X.Offset + delta.X
-            local newY = startPos.Y.Offset + delta.Y
-            button.Position = UDim2.new(0, newX, 0, newY)
-        end
-    end)
-    
-    button.InputEnded:Connect(function(input)
-        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
-            if dragActive and not moved and onClick then
-                onClick()
-            end
-            dragActive = false
-        end
-    end)
-end
-
--- Hàm toggle
-local function toggleGUI()
-    mainFrame.Visible = not mainFrame.Visible
-    if mainFrame.Visible then
-        toggleBtn.Text = "-"
-    else
-        toggleBtn.Text = "+"
-    end
-end
-
-makeDraggableWithClick(toggleBtn, toggleGUI)
-
--- Lưu trữ điểm
-local points = {} -- { [name] = Vector3 }
+-- ====== LOGIC CHÍNH ======
+local points = {}
 local selectedPoint = nil
 
--- Hàm cập nhật danh sách hiển thị
-local function refreshList()
-    -- Xóa các button con cũ (chỉ xóa TextButton)
-    for _, child in ipairs(listFrame:GetChildren()) do
-        if child:IsA("TextButton") then
-            child:Destroy()
-        end
+local function getCharacterPosition()
+    local char = player.Character
+    if not char then return nil end
+    local root = char:FindFirstChild("HumanoidRootPart")
+    return root and root.Position or nil
+end
+
+local function updateCoordDisplay()
+    local pos = getCharacterPosition()
+    if pos then
+        coordBox.Text = string.format("Coordinates: X: %.2f | Y: %.2f | Z: %.2f", pos.X, pos.Y, pos.Z)
+    else
+        coordBox.Text = "Coordinates: Waiting for character..."
     end
-    
+end
+
+local function refreshList()
+    for _, child in ipairs(listFrame:GetChildren()) do
+        if child:IsA("TextButton") then child:Destroy() end
+    end
     for name, pos in pairs(points) do
         local btn = Instance.new("TextButton")
         btn.Size = UDim2.new(1, -10, 0, 25)
@@ -239,78 +216,47 @@ local function refreshList()
         btn.BorderSizePixel = 1
         btn.BorderColor3 = Color3.fromRGB(100,100,100)
         btn.Parent = listFrame
-        
-        -- Khi click vào tên thì chọn điểm đó
         btn.MouseButton1Click:Connect(function()
             selectedPoint = name
-            -- Đổi màu các button
             for _, b in ipairs(listFrame:GetChildren()) do
-                if b:IsA("TextButton") then
-                    b.BackgroundColor3 = Color3.fromRGB(60,60,70)
-                end
+                if b:IsA("TextButton") then b.BackgroundColor3 = Color3.fromRGB(60,60,70) end
             end
             btn.BackgroundColor3 = Color3.fromRGB(0, 120, 0)
         end)
     end
-    
-    -- Cập nhật canvas size
-    local count = #points
+    local count = 0
+    for _ in pairs(points) do count = count + 1 end
     listFrame.CanvasSize = UDim2.new(0, 0, 0, count * 30 + 10)
 end
 
--- Hàm lấy tọa độ nhân vật
-local function getCharacterPosition()
-    local char = player.Character
-    if not char then return nil end
-    local root = char:FindFirstChild("HumanoidRootPart")
-    if root then
-        return root.Position
-    end
-    return nil
-end
-
--- Cập nhật tọa độ hiển thị (gọi liên tục)
-local function updateCoordDisplay()
-    local pos = getCharacterPosition()
-    if pos then
-        coordBox.Text = string.format("Coordinates: X: %.2f | Y: %.2f | Z: %.2f", pos.X, pos.Y, pos.Z)
-    else
-        coordBox.Text = "Coordinates: Waiting for character..."
-    end
-end
-
--- Vòng lặp cập nhật tọa độ (mỗi 0.2s)
+-- Cập nhật tọa độ liên tục
 coroutine.wrap(function()
-    while wait(0.2) do
-        updateCoordDisplay()
-    end
+    while wait(0.2) do updateCoordDisplay() end
 end)()
 
--- Sự kiện các nút
+-- Sự kiện nút toggle (chỉ click, không kéo)
+toggleBtn.MouseButton1Click:Connect(function()
+    mainFrame.Visible = not mainFrame.Visible
+    toggleBtn.Text = mainFrame.Visible and "-" or "+"
+    if mainFrame.Visible then
+        updateCoordDisplay()
+        refreshList()
+    end
+end)
 
--- Lưu điểm hiện tại
+-- Các nút chức năng
 saveBtn.MouseButton1Click:Connect(function()
     local name = nameBox.Text
-    if name == "" then
-        coordBox.Text = "Vui lòng nhập tên điểm!"
-        return
-    end
+    if name == "" then coordBox.Text = "Nhập tên!" return end
     local pos = getCharacterPosition()
-    if not pos then
-        coordBox.Text = "Không tìm thấy nhân vật!"
-        return
-    end
-    if points[name] then
-        coordBox.Text = "Tên đã tồn tại! Hãy đổi tên khác."
-        return
-    end
+    if not pos then coordBox.Text = "Không có nhân vật!" return end
+    if points[name] then coordBox.Text = "Tên đã tồn tại!" return end
     points[name] = pos
     refreshList()
     nameBox.Text = ""
-    coordBox.Text = "Đã lưu điểm: " .. name
+    coordBox.Text = "Đã lưu: " .. name
 end)
 
--- Xóa điểm đã chọn
 delBtn.MouseButton1Click:Connect(function()
     if selectedPoint and points[selectedPoint] then
         points[selectedPoint] = nil
@@ -318,11 +264,10 @@ delBtn.MouseButton1Click:Connect(function()
         refreshList()
         coordBox.Text = "Đã xóa điểm."
     else
-        coordBox.Text = "Chưa chọn điểm nào để xóa."
+        coordBox.Text = "Chưa chọn điểm!"
     end
 end)
 
--- Teleport đến điểm đã chọn
 tpBtn.MouseButton1Click:Connect(function()
     if selectedPoint and points[selectedPoint] then
         local pos = points[selectedPoint]
@@ -331,7 +276,7 @@ tpBtn.MouseButton1Click:Connect(function()
             local root = char:FindFirstChild("HumanoidRootPart")
             if root then
                 root.CFrame = CFrame.new(pos)
-                coordBox.Text = "Đã teleport đến: " .. selectedPoint
+                coordBox.Text = "Teleport đến " .. selectedPoint
             else
                 coordBox.Text = "Không tìm thấy HumanoidRootPart."
             end
@@ -339,11 +284,10 @@ tpBtn.MouseButton1Click:Connect(function()
             coordBox.Text = "Nhân vật chưa xuất hiện."
         end
     else
-        coordBox.Text = "Chưa chọn điểm hoặc điểm không tồn tại."
+        coordBox.Text = "Chưa chọn điểm!"
     end
 end)
 
--- Copy tọa độ hiện tại vào clipboard
 copyBtn.MouseButton1Click:Connect(function()
     local pos = getCharacterPosition()
     if pos then
@@ -352,25 +296,21 @@ copyBtn.MouseButton1Click:Connect(function()
             setclipboard(str)
             coordBox.Text = "Đã copy: " .. str
         else
-            coordBox.Text = "Không hỗ trợ setclipboard."
+            coordBox.Text = "Không hỗ trợ clipboard."
         end
     else
-        coordBox.Text = "Không có tọa độ để copy."
+        coordBox.Text = "Không có tọa độ."
     end
 end)
 
--- Clear all
 clearBtn.MouseButton1Click:Connect(function()
     points = {}
     selectedPoint = nil
     refreshList()
-    coordBox.Text = "Đã xóa tất cả điểm."
+    coordBox.Text = "Đã xóa tất cả."
 end)
 
--- Khởi tạo danh sách lúc đầu
+-- Khởi tạo
 refreshList()
 updateCoordDisplay()
-
--- Lưu ý: Bạn có thể thêm chức năng lưu trữ vĩnh viễn bằng DataStore nếu muốn (cần RemoteEvent).
-
-print("Hệ thống đa điểm đã sẵn sàng!")
+print("Script run.")
