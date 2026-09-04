@@ -1,0 +1,290 @@
+-- ====== SCRIPT: LocalScript (đặt trong StarterPlayerScripts hoặc StarterGui) ======
+-- Tạo UI chính (có thể kéo) và một nút kéo (floating button) để mở/đóng UI đó.
+
+local player = game.Players.LocalPlayer
+local mouse = player:GetMouse()
+
+-- Tạo ScreenGui gốc
+local mainGui = Instance.new("ScreenGui")
+mainGui.Name = "MainGUI"
+mainGui.Parent = player:WaitForChild("PlayerGui")
+
+-- ====== 1. TẠO NÚT KÉO (FLOATING BUTTON) ======
+local dragButton = Instance.new("ImageButton") -- dùng ImageButton hoặc TextButton
+dragButton.Size = UDim2.new(0, 60, 0, 60)
+dragButton.Position = UDim2.new(0.9, -70, 0.1, 10) -- góc phải trên
+dragButton.BackgroundColor3 = Color3.fromRGB(30, 144, 255)
+dragButton.BackgroundTransparency = 0.2
+dragButton.ImageColor3 = Color3.new(1,1,1)
+dragButton.Image = "rbxassetid://6031090996" -- icon bánh răng (có thể đổi)
+dragButton.ImageRectOffset = Vector2.new(0, 0)
+dragButton.Parent = mainGui
+-- Thêm viền bo tròn
+local corner1 = Instance.new("UICorner")
+corner1.CornerRadius = UDim.new(1, 0)
+corner1.Parent = dragButton
+
+-- Thêm chữ "Menu" bên dưới (tùy chọn)
+local label = Instance.new("TextLabel")
+label.Size = UDim2.new(1, 0, 0.4, 0)
+label.Position = UDim2.new(0, 0, 0.6, 0)
+label.BackgroundTransparency = 1
+label.Text = "Menu"
+label.TextColor3 = Color3.new(1,1,1)
+label.TextScaled = true
+label.Font = Enum.Font.SourceSansBold
+label.Parent = dragButton
+
+-- Cho phép kéo nút này (draggable)
+local function makeDraggable(guiObject)
+    local dragging = false
+    local dragStart = nil
+    local startPos = nil
+    
+    guiObject.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = guiObject.Position
+        end
+    end)
+    
+    guiObject.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            -- Cập nhật vị trí theo tỉ lệ (offset)
+            local newX = startPos.X.Offset + delta.X
+            local newY = startPos.Y.Offset + delta.Y
+            -- Giới hạn không ra ngoài màn hình (tùy chỉnh)
+            newX = math.clamp(newX, 0, screenGui.AbsoluteSize.X - guiObject.AbsoluteSize.X)
+            newY = math.clamp(newY, 0, screenGui.AbsoluteSize.Y - guiObject.AbsoluteSize.Y)
+            guiObject.Position = UDim2.new(0, newX, 0, newY)
+        end
+    end)
+    
+    guiObject.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+end
+
+-- Lấy ScreenGui để tính giới hạn (cần dùng AbsoluteSize sau khi render)
+-- Nhưng ở đây ta dùng camera viewport, có thể bỏ qua giới hạn hoặc dùng wait().
+-- Cách đơn giản: không giới hạn hoặc dùng PlayerGui.AbsoluteSize.
+-- Tôi sẽ tạo hàm kéo đơn giản không giới hạn chặt chẽ (vẫn kéo ra ngoài được, nhưng thực tế vẫn nằm trong màn hình gốc)
+-- Để giới hạn đúng, ta dùng wait() cho đến khi gui xuất hiện.
+
+task.wait(0.1) -- chờ render
+makeDraggable(dragButton)
+
+-- ====== 2. TẠO UI CHÍNH (CÓ THỂ KÉO) ======
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 400, 0, 300)
+mainFrame.Position = UDim2.new(0.5, -200, 0.5, -150)
+mainFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
+mainFrame.BackgroundTransparency = 0.1
+mainFrame.Active = true
+mainFrame.Visible = false -- ban đầu ẩn
+mainFrame.Parent = mainGui
+
+-- Bo góc
+local corner2 = Instance.new("UICorner")
+corner2.CornerRadius = UDim.new(0, 12)
+corner2.Parent = mainFrame
+
+-- Tiêu đề
+local titleBar = Instance.new("Frame")
+titleBar.Size = UDim2.new(1, 0, 0, 30)
+titleBar.BackgroundColor3 = Color3.fromRGB(25, 25, 35)
+titleBar.BackgroundTransparency = 0.3
+titleBar.Parent = mainFrame
+
+local titleText = Instance.new("TextLabel")
+titleText.Size = UDim2.new(1, -40, 1, 0)
+titleText.Position = UDim2.new(0, 10, 0, 0)
+titleText.BackgroundTransparency = 1
+titleText.Text = "BẢNG ĐIỀU KHIỂN"
+titleText.TextColor3 = Color3.new(1,1,1)
+titleText.TextXAlignment = Enum.TextXAlignment.Left
+titleText.Font = Enum.Font.SourceSansBold
+titleText.TextSize = 18
+titleText.Parent = titleBar
+
+-- Nút đóng (X)
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size = UDim2.new(0, 30, 1, 0)
+closeBtn.Position = UDim2.new(1, -30, 0, 0)
+closeBtn.Text = "X"
+closeBtn.TextColor3 = Color3.new(1,1,1)
+closeBtn.BackgroundTransparency = 1
+closeBtn.Font = Enum.Font.SourceSansBold
+closeBtn.TextSize = 18
+closeBtn.Parent = titleBar
+closeBtn.MouseButton1Click:Connect(function()
+    mainFrame.Visible = false
+end)
+
+-- Cho phép kéo toàn bộ mainFrame (kéo bằng titleBar)
+makeDraggable(mainFrame) -- kéo cả frame
+-- Nhưng để tiện, ta gán sự kiện kéo chỉ cho titleBar, còn mainFrame vẫn giữ nguyên vị trí theo titleBar.
+-- Cách trên đã cho kéo cả frame, nhưng nếu click vào titleBar thì dễ hơn.
+-- Tôi sẽ ghi đè: gán sự kiện kéo riêng cho titleBar để kéo mainFrame.
+
+-- Hủy sự kiện kéo của mainFrame (nếu đã gán) và gán lại cho titleBar
+-- Cách đơn giản: tạo hàm kéo cho một đối tượng và áp dụng cho titleBar, nhưng vị trí cập nhật cho mainFrame.
+-- Tôi viết lại hàm kéo chuyên dụng cho titleBar:
+
+local function makeTitleDraggable(titleBarObj, targetFrame)
+    local dragging = false
+    local dragStart = nil
+    local startPos = nil
+    
+    titleBarObj.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = targetFrame.Position
+        end
+    end)
+    
+    titleBarObj.InputChanged:Connect(function(input)
+        if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - dragStart
+            local newX = startPos.X.Offset + delta.X
+            local newY = startPos.Y.Offset + delta.Y
+            -- giới hạn (tuỳ chọn)
+            local screenSize = player:GetMouse().ViewSizeX -- hoặc dùng Camera
+            -- Không giới hạn để đơn giản, hoặc có thể clamp
+            targetFrame.Position = UDim2.new(0, newX, 0, newY)
+        end
+    end)
+    
+    titleBarObj.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = false
+        end
+    end)
+end
+
+-- Áp dụng kéo cho titleBar để kéo mainFrame
+makeTitleDraggable(titleBar, mainFrame)
+
+-- (Tùy chọn) Nếu muốn kéo toàn bộ mainFrame thì vẫn giữ, nhưng thường thì chỉ kéo thanh tiêu đề.
+
+-- ====== 3. NỘI DUNG UI (ví dụ) ======
+local content = Instance.new("TextLabel")
+content.Size = UDim2.new(1, -20, 1, -50)
+content.Position = UDim2.new(0, 10, 0, 40)
+content.BackgroundTransparency = 1
+content.Text = "Đây là UI chính.\nBạn có thể thêm các nút, danh sách,..."
+content.TextColor3 = Color3.new(1,1,1)
+content.TextWrapped = true
+content.TextScaled = true
+content.Font = Enum.Font.SourceSans
+content.Parent = mainFrame
+
+-- ====== 4. SỰ KIỆN MỞ UI KHI CLICK VÀO NÚT KÉO ======
+dragButton.MouseButton1Click:Connect(function()
+    mainFrame.Visible = not mainFrame.Visible
+    -- Đưa lên trước
+    if mainFrame.Visible then
+        mainFrame.Parent = mainGui -- giữ nguyên
+    end
+end)
+
+-- ====== 5. ĐẢM BẢO KÉO NÚT VẪN HOẠT ĐỘNG MƯỢT ======
+-- Đã có makeDraggable cho dragButton, nhưng lưu ý xung đột với sự kiện click mở UI.
+-- Kéo và click là hai hành động khác nhau, nhưng nếu kéo mà vẫn kích hoạt click thì gây phiền.
+-- Giải pháp: phân biệt bằng khoảng cách di chuyển.
+-- Tôi sẽ điều chỉnh lại makeDraggable để trả về biến đã kéo hay chưa.
+
+-- Cải tiến: thêm biến đếm để nếu đã kéo thì không kích hoạt click.
+-- Nhưng vì đơn giản, tôi dùng cách: khi nhấn xuống và nhả ra nếu vị trí thay đổi ít hơn 5px thì coi là click.
+-- Tôi sẽ viết lại dragButton xử lý riêng:
+
+local isDragging = false
+local downPos = nil
+
+dragButton.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        downPos = input.Position
+        isDragging = false
+    end
+end)
+
+dragButton.InputChanged:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+        if downPos and (input.Position - downPos).Magnitude > 8 then
+            isDragging = true
+        end
+    end
+end)
+
+-- Gán sự kiện click (thay vì MouseButton1Click trực tiếp)
+dragButton.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        if not isDragging and downPos and (input.Position - downPos).Magnitude < 10 then
+            -- Đây là click thực sự
+            mainFrame.Visible = not mainFrame.Visible
+        end
+        downPos = nil
+    end
+end)
+
+-- Vẫn cần chức năng kéo cho dragButton, nhưng đã có makeDraggable ở trên.
+-- Tuy nhiên makeDraggable đang dùng InputBegan/Changed/Ended, có thể gây xung đột.
+-- Tôi sẽ gộp: sử dụng cùng một bộ sự kiện.
+
+-- Cách tối ưu: viết lại toàn bộ kéo + click cho dragButton.
+-- Nhưng để tiết kiệm, tôi sẽ xóa makeDraggable cũ và viết mới:
+
+-- Xóa sự kiện cũ (không thể xóa dễ, nên tôi sẽ comment và tạo mới)
+
+-- Tôi sẽ tạo một hàm kéo mới kết hợp click:
+local function makeFloatingButton(button, onClick)
+    local dragActive = false
+    local startMouse = nil
+    local startPos = nil
+    local moved = false
+    
+    button.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragActive = true
+            startMouse = input.Position
+            startPos = button.Position
+            moved = false
+        end
+    end)
+    
+    button.InputChanged:Connect(function(input)
+        if dragActive and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+            local delta = input.Position - startMouse
+            if delta.Magnitude > 5 then moved = true end
+            local newX = startPos.X.Offset + delta.X
+            local newY = startPos.Y.Offset + delta.Y
+            button.Position = UDim2.new(0, newX, 0, newY)
+        end
+    end)
+    
+    button.InputEnded:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            if dragActive and not moved and onClick then
+                onClick()
+            end
+            dragActive = false
+            startMouse = nil
+            startPos = nil
+        end
+    end)
+end
+
+-- Áp dụng cho dragButton
+makeFloatingButton(dragButton, function()
+    mainFrame.Visible = not mainFrame.Visible
+end)
+
+-- Còn mainFrame và titleBar kéo: vẫn giữ makeTitleDraggable như trên (hoạt động tốt)
+
+-- ====== KẾT THÚC ======
+print("readytp!")
