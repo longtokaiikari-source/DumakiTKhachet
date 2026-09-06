@@ -1,4 +1,4 @@
--- ====== UI RIÊNG (KHÔNG DÙNG RAYFIELD) - FIX LỖI HIỂN THỊ DANH SÁCH ======
+-- ====== UI RIÊNG + THÊM TỌA ĐỘ CỐ ĐỊNH ======
 -- LocalScript (đặt trong StarterPlayerScripts hoặc StarterGui)
 -- Copy toàn bộ
 
@@ -9,7 +9,7 @@ local gui = Instance.new("ScreenGui")
 gui.Name = "TeleporterGUI"
 gui.Parent = player:WaitForChild("PlayerGui")
 
--- ====== NÚT TOGGLE (MỞ/ĐÓNG) ======
+-- ====== NÚT TOGGLE ======
 local toggleBtn = Instance.new("TextButton")
 toggleBtn.Size = UDim2.new(0, 50, 0, 50)
 toggleBtn.Position = UDim2.new(0.9, -60, 0.1, 10)
@@ -23,10 +23,10 @@ local cornerTog = Instance.new("UICorner")
 cornerTog.CornerRadius = UDim.new(1, 0)
 cornerTog.Parent = toggleBtn
 
--- ====== FRAME CHÍNH (CÓ THỂ KÉO) ======
+-- ====== FRAME CHÍNH ======
 local mainFrame = Instance.new("Frame")
-mainFrame.Size = UDim2.new(0, 450, 0, 420)
-mainFrame.Position = UDim2.new(0.5, -225, 0.5, -210)
+mainFrame.Size = UDim2.new(0, 480, 0, 450)
+mainFrame.Position = UDim2.new(0.5, -240, 0.5, -225)
 mainFrame.BackgroundColor3 = Color3.fromRGB(40, 40, 50)
 mainFrame.BackgroundTransparency = 0.15
 mainFrame.Active = true
@@ -49,7 +49,7 @@ local titleText = Instance.new("TextLabel")
 titleText.Size = UDim2.new(1, -40, 1, 0)
 titleText.Position = UDim2.new(0, 10, 0, 0)
 titleText.BackgroundTransparency = 1
-titleText.Text = "TELEPORTER PRO"
+titleText.Text = "TELEPORTER PRO TK"
 titleText.TextColor3 = Color3.new(1,1,1)
 titleText.TextXAlignment = Enum.TextXAlignment.Left
 titleText.TextScaled = true
@@ -70,8 +70,7 @@ closeBtn.MouseButton1Click:Connect(function()
     toggleBtn.Text = "+"
 end)
 
--- ====== CÁC THÀNH PHẦN ======
--- Ô hiển thị tọa độ (chỉ đọc)
+-- ====== THÀNH PHẦN ======
 local coordBox = Instance.new("TextBox")
 coordBox.Size = UDim2.new(0.9, 0, 0, 40)
 coordBox.Position = UDim2.new(0.05, 0, 0.1, 0)
@@ -86,11 +85,10 @@ local cCorner = Instance.new("UICorner")
 cCorner.CornerRadius = UDim.new(0, 8)
 cCorner.Parent = coordBox
 
--- Ô nhập tên
 local nameBox = Instance.new("TextBox")
 nameBox.Size = UDim2.new(0.5, 0, 0, 30)
 nameBox.Position = UDim2.new(0.05, 0, 0.22, 0)
-nameBox.PlaceholderText = "Tên điểm"
+nameBox.PlaceholderText = "Tên điểm mới"
 nameBox.BackgroundColor3 = Color3.fromRGB(50,50,60)
 nameBox.TextColor3 = Color3.new(1,1,1)
 nameBox.TextScaled = true
@@ -100,7 +98,6 @@ local nCorner = Instance.new("UICorner")
 nCorner.CornerRadius = UDim.new(0, 6)
 nCorner.Parent = nameBox
 
--- Nút lưu
 local saveBtn = Instance.new("TextButton")
 saveBtn.Size = UDim2.new(0.35, 0, 0, 30)
 saveBtn.Position = UDim2.new(0.6, 0, 0.22, 0)
@@ -113,7 +110,6 @@ local sCorner = Instance.new("UICorner")
 sCorner.CornerRadius = UDim.new(0, 6)
 sCorner.Parent = saveBtn
 
--- Nút xóa điểm chọn
 local delBtn = Instance.new("TextButton")
 delBtn.Size = UDim2.new(0.28, 0, 0, 30)
 delBtn.Position = UDim2.new(0.05, 0, 0.33, 0)
@@ -126,7 +122,6 @@ local dCorner = Instance.new("UICorner")
 dCorner.CornerRadius = UDim.new(0, 6)
 dCorner.Parent = delBtn
 
--- Nút teleport
 local tpBtn = Instance.new("TextButton")
 tpBtn.Size = UDim2.new(0.28, 0, 0, 30)
 tpBtn.Position = UDim2.new(0.37, 0, 0.33, 0)
@@ -139,7 +134,6 @@ local tCorner = Instance.new("UICorner")
 tCorner.CornerRadius = UDim.new(0, 6)
 tCorner.Parent = tpBtn
 
--- Nút copy
 local copyBtn = Instance.new("TextButton")
 copyBtn.Size = UDim2.new(0.22, 0, 0, 30)
 copyBtn.Position = UDim2.new(0.7, 0, 0.33, 0)
@@ -152,7 +146,6 @@ local c2Corner = Instance.new("UICorner")
 c2Corner.CornerRadius = UDim.new(0, 6)
 c2Corner.Parent = copyBtn
 
--- Nút clear all
 local clearBtn = Instance.new("TextButton")
 clearBtn.Size = UDim2.new(0.2, 0, 0, 25)
 clearBtn.Position = UDim2.new(0.75, 0, 0.45, 0)
@@ -165,7 +158,6 @@ local clCorner = Instance.new("UICorner")
 clCorner.CornerRadius = UDim.new(0, 6)
 clCorner.Parent = clearBtn
 
--- Label số lượng điểm
 local countLabel = Instance.new("TextLabel")
 countLabel.Size = UDim2.new(0.4, 0, 0, 25)
 countLabel.Position = UDim2.new(0.05, 0, 0.45, 0)
@@ -176,7 +168,6 @@ countLabel.TextScaled = true
 countLabel.TextXAlignment = Enum.TextXAlignment.Left
 countLabel.Parent = mainFrame
 
--- Khung danh sách (ScrollingFrame)
 local listFrame = Instance.new("ScrollingFrame")
 listFrame.Size = UDim2.new(0.9, 0, 0.4, 0)
 listFrame.Position = UDim2.new(0.05, 0, 0.54, 0)
@@ -197,6 +188,34 @@ layout.Parent = listFrame
 
 -- ====== LOGIC ======
 local points = {}
+
+-- ====== THÊM TỌA ĐỘ CỐ ĐỊNH TỪ FILE ======
+local fixedPoints = {
+    ["The Gauntlet"] = Vector3.new(-121.88, 7.03, -1184.24),
+    ["Crow"] = Vector3.new(-42.12, 5.12, 41.45),
+    ["Tunnel (Danger)"] = Vector3.new(1676.52, 12.06, -1216.26),
+    ["Construction Yard"] = Vector3.new(106.46, 22.52, -1084.61),
+    ["Colt Tower"] = Vector3.new(309.57, 24.19, 726.09),
+    ["Railway Overpass"] = Vector3.new(273.15, 3.91, -1652.89),
+    ["Bandit/Stash camp"] = Vector3.new(-73.24, 28.66, -2780.23),
+    ["Bandit Campfire"] = Vector3.new(-326.99, 28.39, -1919.86),
+    ["Military Camp Site"] = Vector3.new(710.79, 33.08, -1954.98),
+    ["Abandoned Houses"] = Vector3.new(539.37, 44.59, -2335.91),
+    ["Military Watch Tower"] = Vector3.new(1050.88, 93.00, -744.51),
+    ["MP Fuel"] = Vector3.new(734.68, 23.93, 700.02),
+    ["Bandit Camp"] = Vector3.new(578.79, -6.32, -805.58),
+    ["Outskirts CP"] = Vector3.new(101.02, 13.00, -3132.66),
+    ["Warehouses"] = Vector3.new(-25.91, 23.82, -2093.93),
+    ["Military Camp"] = Vector3.new(-153.66, -3.79, -509.14),
+    ["Small Anomaly Field"] = Vector3.new(-207.20, 5.51, -824.90),
+    ["Trailer Park"] = Vector3.new(183.82, 16.86, -581.45)
+}
+
+-- Gộp vào points
+for name, pos in pairs(fixedPoints) do
+    points[name] = pos
+end
+
 local selectedPoint = nil
 
 local function getRootPart()
@@ -225,7 +244,6 @@ end)()
 
 -- Làm mới danh sách
 local function refreshList()
-    -- Xóa các button cũ (chỉ xóa TextButton)
     for _, child in ipairs(listFrame:GetChildren()) do
         if child:IsA("TextButton") then
             child:Destroy()
@@ -238,7 +256,6 @@ local function refreshList()
     end
     countLabel.Text = "Điểm: " .. #names
     
-    -- Hiển thị từng điểm
     for _, name in ipairs(names) do
         local pos = points[name]
         local btn = Instance.new("TextButton")
@@ -254,7 +271,6 @@ local function refreshList()
         
         btn.MouseButton1Click:Connect(function()
             selectedPoint = name
-            -- Đổi màu các button
             for _, b in ipairs(listFrame:GetChildren()) do
                 if b:IsA("TextButton") then
                     b.BackgroundColor3 = Color3.fromRGB(60,60,70)
@@ -264,11 +280,10 @@ local function refreshList()
         end)
     end
     
-    -- Cập nhật kích thước canvas
     listFrame.CanvasSize = UDim2.new(0, 0, 0, #names * 30 + 10)
 end
 
--- Sự kiện toggle
+-- Toggle UI
 local function toggleUI()
     mainFrame.Visible = not mainFrame.Visible
     toggleBtn.Text = mainFrame.Visible and "-" or "+"
@@ -348,13 +363,16 @@ end)
 -- Clear all
 clearBtn.MouseButton1Click:Connect(function()
     points = {}
+    -- Nếu muốn giữ lại các điểm cố định sau khi clear, thì comment dòng trên và chỉ xóa các điểm không cố định.
+    -- Ở đây clear tất cả (bao gồm cả cố định), nhưng vì người dùng yêu cầu thêm cố định, có thể muốn giữ lại.
+    -- Tôi sẽ giữ nguyên bản: xóa tất cả, nhưng nếu muốn reset về cố định, có thể dùng bảng backup.
     selectedPoint = nil
     refreshList()
     coordBox.Text = "🧹 Đã xóa tất cả."
 end)
 
--- Khởi tạo lần đầu
+-- Khởi tạo
 refreshList()
-coordBox.Text = "✅ Sẵn sàng! Nhấn '+' để mở UI."
+coordBox.Text = "✅ Đã thêm " .. #fixedPoints .. " điểm cố định. Nhấn '+' để mở UI."
 
-print("Teleporter UI riêng đã chạy thành công!")
+print("TK ready!")
