@@ -1,0 +1,272 @@
+-- ============================================================
+--  AURAKILL TEST — Dump-verified từ MTC2/MeleeInventory.lua
+--  network:FireServer("InventoryAction","Slash",n)
+--  network:FireServer("InventoryAction","Impact",{x,y,z},uid,part)
+--  Một nút bật/tắt. Drag được.
+-- ============================================================
+
+local RunService  = game:GetService("RunService")
+local Players     = game:GetService("Players")
+local LocalPlayer = Players.LocalPlayer
+
+local AK = {
+    Enabled    = false,
+    Range      = 20,
+    Interval   = 0,
+    TargetPart = "Head",
+    _net       = nil,
+    _lastFire  = 0,
+    _conn      = nil,
+}
+
+-- ──────────────────────────────────────────────────────────────
+--  GET NETWORK OBJECT
+--  MeleeInventory.lua line 1: shared.import("network")
+--  Đây là v_u_2 — có FireServer() method riêng, không cần encrypt thủ công
+-- ──────────────────────────────────────────────────────────────
+local function GetNet()
+    if AK._net then return AK._net end
+
+    -- Method 1: shared.import — đúng theo source
+    if shared and type(shared.import) == "function" then
+        local ok, net = pcall(function() return shared.import("network") end)
+        if ok and net and type(net.FireServer) == "function" then
+            AK._net = net
+            print("[AK] network via shared.import OK")
+            return net
+        end
+    end
+
+    -- Method 2: GC scan — tìm table có FireServer + _key + _code
+    local gok, gc = pcall(function() return filtergc("table") end)
+    if not gok then gok, gc = pcall(function() return getgc(true) end) end
+    if gok and gc then
+        for _, v in pairs(gc) do
+            if type(v) ~= "table" then continue end
+            if type(rawget(v,"FireServer")) == "function"
+                and type(rawget(v,"_key")) == "table"
+                and type(rawget(v,"_code")) == "string"
+            then
+                AK._net = v
+                print("[AK] network via GC, code:", v._code:sub(1,8))
+                return v
+            end
+        end
+    end
+
+    return nil
+end
+
+-- ──────────────────────────────────────────────────────────────
+--  GET UID — đúng theo AK_GetUID trong tipmobile
+-- ──────────────────────────────────────────────────────────────
+local function GetUID(actor)
+    for _, field in ipairs({"UID","_id","Id","UUID"}) do
+        local v = rawget(actor, field)
+        if type(v)=="string" and v:match("^%x+%-%x+%-%x+%-%x+%-%x+$") then return v end
+    end
+    for _, v in pairs(actor) do
+        if type(v)=="string" and v:match("^%x+%-%x+%-%x+%-%x+%-%x+$") then return v end
+    end
+    return nil
+end
+
+-- ──────────────────────────────────────────────────────────────
+--  FIRE — đúng per MeleeInventory._use dump
+--  Slash: network:FireServer("InventoryAction","Slash",n)
+--  Impact: network:FireServer("InventoryAction","Impact",{x,y,z},uid,part)
+-- ──────────────────────────────────────────────────────────────
+local function AK_Fire(actor)
+    local net = GetNet()
+    if not net then return false end
+
+    local char = actor.Character
+    if not char then return false end
+
+    local part = char:FindFirstChild(AK.TargetPart)
+               or char:FindFirstChild("Head")
+               or char:FindFirstChild("UpperTorso")
+               or char.PrimaryPart
+    if not part then return false end
+
+    local pos = part.Position
+    local uid = GetUID(actor)
+    if not uid then return false end
+
+    local n = math.random(1, 3)
+
+    -- Slash packet — đúng per source line: v_u_2:FireServer("InventoryAction","Slash",v13)
+    pcall(function()
+        net:FireServer("InventoryAction", "Slash", n)
+    end)
+
+    -- Impact packet — đúng per source:
+    -- v_u_2:FireServer("InventoryAction","Impact", v_u_7(v15), v16, v17)
+    -- v_u_7 = vector3toTable = {X,Y,Z}
+    -- v16 = actor UID, v17 = part name
+    pcall(function()
+        net:FireServer("InventoryAction", "Impact", {pos.X, pos.Y, pos.Z}, uid, part.Name)
+    end)
+
+    print(string.format("[AK] Fired → %s [%s] dist=%.1f",
+        uid:sub(1,8), part.Name, pos.Magnitude))
+    return true
+end
+
+-- ──────────────────────────────────────────────────────────────
+--  ACTOR SCAN — BRM5 Replicator.Actors
+-- ──────────────────────────────────────────────────────────────
+local function GetActors()
+    -- Method 1: BRM5 Replicator via GC
+    local gok, gc = pcall(function() return getgc(true) end)
+    if gok and gc then
+        for _, v in pairs(gc) do
+            if type(v)=="table"
+                and rawget(v,"LocalActor")
+                and rawget(v,"Actors")
+                and type(rawget(v,"Actors"))=="table"
+            then
+                return v.Actors
+            end
+        end
+    end
+
+    -- Method 2: wrap Players
+    local result = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character then
+            result[#result+1] = {
+                Alive    = true,
+                Character= p.Character,
+                Position = p.Character.PrimaryPart and p.Character.PrimaryPart.Position,
+                UID      = tostring(p.UserId),
+            }
+        end
+    end
+    return result
+end
+
+-- ──────────────────────────────────────────────────────────────
+--  TICK
+-- ──────────────────────────────────────────────────────────────
+local function AK_Tick()
+    if not AK.Enabled then return end
+    local now = tick()
+    if now - AK._lastFire < AK.Interval then return end
+
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    local myPos = root.Position
+
+    local actors   = GetActors()
+    local candidates = {}
+
+    for _, a in pairs(actors) do
+        if not a or not a.Alive or not a.Character then continue end
+        local aPos = a.Position
+        if not aPos then
+            local pp = a.Character.PrimaryPart
+            if pp then aPos = pp.Position end
+        end
+        if not aPos then continue end
+        local d = (aPos - myPos).Magnitude
+        if d <= AK.Range then
+            candidates[#candidates+1] = {Actor=a, Distance=d}
+        end
+    end
+
+    if #candidates == 0 then return end
+    table.sort(candidates, function(a,b) return a.Distance < b.Distance end)
+
+    AK._lastFire = now
+    for i = 1, math.min(10, #candidates) do
+        local target = candidates[i].Actor
+        task.spawn(function()
+            if not AK_Fire(target) then AK._net = nil end
+        end)
+    end
+end
+
+-- ──────────────────────────────────────────────────────────────
+--  UI — một nút bật/tắt, drag được
+-- ──────────────────────────────────────────────────────────────
+local sg = Instance.new("ScreenGui")
+sg.Name = "AK_TestGui"
+sg.ResetOnSpawn = false
+sg.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+pcall(function() sg.Parent = game:GetService("CoreGui") end)
+if not sg.Parent then sg.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+local frame = Instance.new("Frame")
+frame.Size = UDim2.fromOffset(200, 92)
+frame.Position = UDim2.new(0, 20, 0.5, -46)
+frame.BackgroundColor3 = Color3.fromRGB(18,18,18)
+frame.BorderSizePixel = 0
+frame.Active = true
+frame.Draggable = true
+frame.Parent = sg
+Instance.new("UICorner", frame).CornerRadius = UDim.new(0,8)
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1,0,0,26)
+title.BackgroundColor3 = Color3.fromRGB(35,35,35)
+title.Text = "AuraKill [dump-verified]"
+title.TextColor3 = Color3.fromRGB(210,210,210)
+title.Font = Enum.Font.GothamBold
+title.TextSize = 12
+title.Parent = frame
+Instance.new("UICorner", title).CornerRadius = UDim.new(0,8)
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(1,-10,0,18)
+statusLabel.Position = UDim2.fromOffset(5,28)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = "Status: OFF | Net: scanning..."
+statusLabel.TextColor3 = Color3.fromRGB(150,150,150)
+statusLabel.Font = Enum.Font.Gotham
+statusLabel.TextSize = 11
+statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+statusLabel.Parent = frame
+
+local btn = Instance.new("TextButton")
+btn.Size = UDim2.new(1,-16,0,36)
+btn.Position = UDim2.fromOffset(8, 50)
+btn.BackgroundColor3 = Color3.fromRGB(45,160,75)
+btn.Text = "ENABLE"
+btn.TextColor3 = Color3.new(1,1,1)
+btn.Font = Enum.Font.GothamBold
+btn.TextSize = 14
+btn.Parent = frame
+Instance.new("UICorner", btn).CornerRadius = UDim.new(0,6)
+
+btn.MouseButton1Click:Connect(function()
+    AK.Enabled = not AK.Enabled
+    if AK.Enabled then
+        task.spawn(GetNet)
+        if not AK._conn then
+            AK._conn = RunService.Heartbeat:Connect(AK_Tick)
+        end
+        btn.BackgroundColor3 = Color3.fromRGB(200,45,45)
+        btn.Text = "DISABLE"
+    else
+        if AK._conn then
+            pcall(function() AK._conn:Disconnect() end)
+            AK._conn = nil
+        end
+        btn.BackgroundColor3 = Color3.fromRGB(45,160,75)
+        btn.Text = "ENABLE"
+    end
+end)
+
+-- Status updater
+RunService.Heartbeat:Connect(function()
+    local netOk = AK._net ~= nil
+    statusLabel.Text = string.format("Status: %s | Net: %s",
+        AK.Enabled and "ON" or "OFF",
+        netOk and "OK ("..AK._net._code:sub(1,6).."...)" or "scanning..."
+    )
+end)
+
+getgenv().AuraKill_Test = AK
+print("[AuraKill] Loaded — dump-verified MeleeInventory packet layout")
