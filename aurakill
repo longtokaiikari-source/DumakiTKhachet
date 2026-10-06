@@ -1,27 +1,252 @@
-local AuraKill = {
-    Enabled     = true,
-    Range       = 1000,
-    Interval    = 0.05,
-    BatchSize   = 3,
-    TargetPart  = "Head",
-    DebugMode   = false,
-    _net        = nil,
-    _remote     = nil,
-    _lastFire   = 0,
-    _connection = nil,
-    _running    = false,
-    _stats      = { sent = 0, failed = 0 },
+local Players = game:GetService("Players")
+local RunService = game:GetService("RunService")
+local HttpService = game:GetService("HttpService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local LocalPlayer = Players.LocalPlayer
+local Camera = workspace.CurrentCamera
+
+local function FindReplicator()
+    local RS = rawget(_G, "ReplicatorService")
+    if RS and RS.LocalActor then return RS end
+    local ok, gc = pcall(function() return getgc(true) end)
+    if not ok or not gc then return nil end
+    for _, v in pairs(gc) do
+        if type(v) == "table" and rawget(v, "Actors") and rawget(v, "LocalActor") then
+            RS = v; _G.ReplicatorService = v; return v
+        end
+    end
+    return nil
+end
+
+local function GetEnemies()
+    if ActorManager and ActorManager.Enemies and #ActorManager.Enemies > 0 then
+        return ActorManager.Enemies
+    end
+    local RS = FindReplicator()
+    if not RS or not RS.Actors then return {} end
+    local list = {}
+    local me = RS.LocalActor
+    for _, a in pairs(RS.Actors) do
+        if a and a.Alive and a.Character and a ~= me then
+            if not a.Owner or a.Owner ~= LocalPlayer then
+                list[#list + 1] = a
+            end
+        end
+    end
+    return list
+end
+
+local function GetMyActor()
+    local RS = FindReplicator()
+    return RS and RS.LocalActor
+end
+
+local MagicBullet = { Enabled = false, TargetPart = "Head", _hooked = false }
+
+function MagicBullet:_getTarget()
+    local target, bestDist = nil, math.huge
+    local me = GetMyActor()
+    local origin = me and me.Position or Camera.CFrame.Position
+    for _, a in ipairs(GetEnemies()) do
+        local pos = a.Position
+        if pos then
+            local d = (pos - origin).Magnitude
+            if d < bestDist then bestDist = d; target = a end
+        end
+    end
+    return target
+end
+
+function MagicBullet:_getTargetPart(actor)
+    if not actor or not actor.Character then return nil end
+    return actor.Character:FindFirstChild(self.TargetPart)
+        or actor.Character:FindFirstChild("Head")
+        or actor.Character:FindFirstChild("UpperTorso")
+        or actor.Character.PrimaryPart
+end
+
+function MagicBullet:HookFirearmController(ctrl)
+    if type(ctrl) ~= "table" then return end
+    if ctrl._magicBulletHooked then return end
+
+    if ctrl.GetMuzzleCFrame then
+        ctrl._origGetMuzzle = ctrl.GetMuzzleCFrame
+        ctrl.GetMuzzleCFrame = function(self, ...)
+            local cf, a, b = ctrl._origGetMuzzle(self, ...)
+            if not MagicBullet.Enabled then return cf, a, b end
+            local target = MagicBullet:_getTarget()
+            if not target then return cf, a, b end
+            local part = MagicBullet:_getTargetPart(target)
+            if not part then return cf, a, b end
+            local newCF = CFrame.new(cf.Position, part.Position)
+            return newCF, a, b
+        end
+    end
+
+    if ctrl.Discharge then
+        ctrl._origDischarge = ctrl.Discharge
+        ctrl.Discharge = function(self, ...)
+            if MagicBullet.Enabled then
+                local target = MagicBullet:_getTarget()
+                if target then
+                    local part = MagicBullet:_getTargetPart(target)
+                    if part then
+                        local cf = self:GetMuzzleCFrame()
+                        if cf then
+                            local newCF = CFrame.new(cf.Position, part.Position)
+                            local old = self.GetMuzzleCFrame
+                            self.GetMuzzleCFrame = function() return newCF end
+                            ctrl._origDischarge(self, ...)
+                            self.GetMuzzleCFrame = old
+                            return
+                        end
+                    end
+                end
+            end
+            return ctrl._origDischarge(self, ...)
+        end
+    end
+    ctrl._magicBulletHooked = true
+end
+
+function MagicBullet:ScanControllers()
+    local RS = FindReplicator()
+    if not RS or not RS.Actors then return end
+    local ok, gc = pcall(function() return getgc(true) end)
+    if not ok or not gc then return end
+    for _, v in pairs(gc) do
+        if type(v) == "table" and rawget(v, "_firearm") and (rawget(v, "_actor") or rawget(v, "_mag")) then
+            local actor = rawget(v, "_actor")
+            if actor and actor.IsLocalPlayer then
+                self:HookFirearmController(v)
+            end
+        end
+    end
+end
+
+function MagicBullet:Start()
+    if self._running then return end
+    self._running = true
+    self.Enabled = true
+    self:ScanControllers()
+    self._conn = RunService.Heartbeat:Connect(function()
+        if tick() - (self._lastScan or 0) > 2 then
+            self._lastScan = tick()
+            self:ScanControllers()
+        end
+    end)
+    print("[MagicBullet] STARTED")
+end
+
+function MagicBullet:Stop()
+    self._running = false
+    self.Enabled = false
+    if self._conn then self._conn:Disconnect(); self._conn = nil end
+    print("[MagicBullet] STOPPED")
+end
+
+_G.MagicBullet = MagicBullet
+getgenv().MagicBullet = MagicBullet
+
+local KillAura = {
+    Enabled = false,
+    Range = 15,
+    Interval = 0.1,
+    TargetPart = "Head",
+    _last = 0,
+    _conn = nil,
 }
 
-local Players           = game:GetService("Players")
-local RunService        = game:GetService("RunService")
-local ReplicatedStorage = game:GetService("ReplicatedStorage")
-local HttpService       = game:GetService("HttpService")
-local LocalPlayer       = Players.LocalPlayer
-local Camera            = workspace.CurrentCamera
+function KillAura:_getEquippedMelee()
+    local RS = FindReplicator()
+    local me = RS and RS.LocalActor
+    if not me or not me._equipped then return nil end
+    local item = me._inventory and me._inventory[me._equipped]
+    if not item then return nil end
+    if item.Name and (item.Name:find("Melee") or item.Name:find("Knife") or item.Name:find("Axe")) then
+        return item
+    end
+    return item
+end
 
-local function log(...)
-    if AuraKill.DebugMode then print("[AuraKill]", ...) end
+function KillAura:_attack(actor)
+    local me = GetMyActor()
+    if not me or not actor or not actor.Character then return end
+    local targetPart = actor.Character:FindFirstChild(self.TargetPart)
+        or actor.Character:FindFirstChild("Head")
+        or actor.Character.PrimaryPart
+    if not targetPart then return end
+
+    if me.Action then
+        pcall(function()
+            me:Action(Enum.ActionType.Inventory, "Use")
+        end)
+    end
+
+    local network = shared.import and nil
+    if network then
+        pcall(function()
+            network:FireServer("InventoryAction", "Use")
+        end)
+    end
+end
+
+function KillAura:_tick()
+    if not self.Enabled then return end
+    local now = tick()
+    if now - self._last < self.Interval then return end
+    self._last = now
+
+    local me = GetMyActor()
+    if not me or not me.Position then return end
+
+    local best, bestDist = nil, self.Range
+    for _, a in ipairs(GetEnemies()) do
+        local pos = a.Position
+        if pos then
+            local d = (pos - me.Position).Magnitude
+            if d < bestDist then bestDist = d; best = a end
+        end
+    end
+    if best then self:_attack(best) end
+end
+
+function KillAura:Start()
+    if self._running then return end
+    self._running = true
+    self.Enabled = true
+    self._conn = RunService.Heartbeat:Connect(function()
+        pcall(function() KillAura:_tick() end)
+    end)
+    print("[KillAura] STARTED")
+end
+
+function KillAura:Stop()
+    self._running = false
+    self.Enabled = false
+    if self._conn then self._conn:Disconnect(); self._conn = nil end
+    print("[KillAura] STOPPED")
+end
+
+_G.KillAura = KillAura
+getgenv().KillAura = KillAura
+
+local AuraKill = {
+    Enabled = true,
+    Range = 2000,
+    Interval = 0.05,
+    BatchSize = 3,
+    TargetPart = "Head",
+    Debug = false,
+    _net = nil,
+    _remote = nil,
+    _lastFire = 0,
+    _conn = nil,
+    _stats = { sent = 0, failed = 0 },
+}
+
+local function AK_log(...)
+    if AuraKill.Debug then print("[AuraKill]", ...) end
 end
 
 local function AK_FindNet()
@@ -30,7 +255,7 @@ local function AK_FindNet()
         local ok, net = pcall(function() return shared.import("network") end)
         if ok and type(net) == "table" and rawget(net, "_key") and rawget(net, "_code") then
             AuraKill._net = net
-            print("[AuraKill] net via shared.import:", tostring(net._code):sub(1,8))
+            AK_log("net via shared.import:", tostring(net._code):sub(1,8))
             return net
         end
     end
@@ -43,7 +268,7 @@ local function AK_FindNet()
         local ok, r = pcall(function() return getgc(true) end)
         if ok then gc = r end
     end
-    if type(gc) ~= "table" then warn("[AuraKill] No GC access") return nil end
+    if type(gc) ~= "table" then return nil end
     local uuidPat = "^%x+%-%x+%-%x+%-%x+%-%x+$"
     for _, v in pairs(gc) do
         if type(v) == "table" then
@@ -59,13 +284,12 @@ local function AK_FindNet()
                 end
                 if allNum then
                     AuraKill._net = v
-                    print("[AuraKill] net via GC:", co:sub(1,8), "key[1]="..tostring(k[1]))
+                    AK_log("net via GC:", co:sub(1,8), "key[1]="..tostring(k[1]))
                     return v
                 end
             end
         end
     end
-    warn("[AuraKill] Network object not found")
     return nil
 end
 
@@ -79,7 +303,7 @@ local function AK_GetRemote()
                 if typeof(obj) == "Instance"
                    and (obj:IsA("RemoteEvent") or obj:IsA("RemoteFunction")) then
                     AuraKill._remote = obj
-                    print("[AuraKill] remote via _events:", name, obj:GetFullName())
+                    AK_log("remote via _events:", name, obj:GetFullName())
                     return obj
                 end
             end
@@ -87,16 +311,14 @@ local function AK_GetRemote()
     end
     local events = ReplicatedStorage:FindFirstChild("Events")
     if events then
-        for _, n in ipairs({"RemoteEvent", "Remote", "Main", "Net"}) do
+        for _, n in ipairs({"RemoteEvent","Remote","Main","Net"}) do
             local r = events:FindFirstChild(n)
             if r and (r:IsA("RemoteEvent") or r:IsA("RemoteFunction")) then
                 AuraKill._remote = r
-                print("[AuraKill] remote via path:", r:GetFullName())
                 return r
             end
         end
     end
-    warn("[AuraKill] Remote not found")
     return nil
 end
 
@@ -120,13 +342,13 @@ end
 
 local function AK_Encrypt(data, net)
     local ok, raw = pcall(function() return HttpService:JSONEncode(data) end)
-    if not ok or not raw then log("JSONEncode failed:", raw) return nil end
+    if not ok or not raw then return nil end
     return AK_NetEncode(raw, net._key)
 end
 
 local function AK_GetUID(actor)
     local uuidPat = "^%x+%-%x+%-%x+%-%x+%-%x+$"
-    for _, f in ipairs({"UID", "_uid", "_UID", "ActorUID", "UUID", "_id", "Id"}) do
+    for _, f in ipairs({"UID","_uid","_UID","ActorUID","UUID","_id","Id"}) do
         local v = rawget(actor, f)
         if type(v) == "string" and v:match(uuidPat) then return v end
     end
@@ -165,72 +387,35 @@ local function AK_Fire(actor)
     local uid = AK_GetUID(actor)
     if not uid then return false, "no uid" end
     local n = math.random(1, 3)
+
     local slash = AK_Encrypt({net._code, "InventoryAction", "Slash", n}, net)
     if not slash then return false, "encrypt slash" end
     if not AK_Send(remote, slash) then return false, "send slash" end
+
     task.wait(0.03)
+
     local impact = AK_Encrypt(
-        {net._code, "InventoryAction", "Impact", {pos.X, pos.Y, pos.Z}, uid, part.Name},
+        {net._code, "InventoryAction", "Impact",
+         {pos.X, pos.Y, pos.Z}, uid, part.Name},
         net
     )
     if not impact then return false, "encrypt impact" end
     if not AK_Send(remote, impact) then return false, "send impact" end
+
     AuraKill._stats.sent = AuraKill._stats.sent + 2
-    log("fired â†’", actor.OwnerName or uid:sub(1,8), part.Name)
+    AK_log("fired â†’", actor.OwnerName or uid:sub(1,8), part.Name)
     return true
 end
 
-local function AK_GetEnemies()
-    if ActorManager and ActorManager.Enemies and #ActorManager.Enemies > 0 then
-        return ActorManager.Enemies
-    end
-    local list = {}
-    local RS = rawget(_G, "ReplicatorService")
-    if not RS then
-        local ok, gc = pcall(function() return getgc(true) end)
-        if ok and gc then
-            for _, v in pairs(gc) do
-                if type(v) == "table" and rawget(v, "Actors") and rawget(v, "LocalActor") then
-                    RS = v; break
-                end
-            end
-        end
-    end
-    if not RS or not RS.Actors then return list end
-    local me = RS.LocalActor
-    for _, a in pairs(RS.Actors) do
-        if a and a.Alive and a.Character and a ~= me then
-            if a.Zombie or (a.Owner and a.Owner ~= LocalPlayer) then
-                list[#list + 1] = a
-            end
-        end
-    end
-    return list
-end
-
-local function AK_GetMyActor()
-    local RS = rawget(_G, "ReplicatorService")
-    if RS and RS.LocalActor then return RS.LocalActor end
-    local ok, gc = pcall(function() return getgc(true) end)
-    if ok and gc then
-        for _, v in pairs(gc) do
-            if type(v) == "table" and rawget(v, "Actors") and rawget(v, "LocalActor") then
-                return v.LocalActor
-            end
-        end
-    end
-    return nil
-end
-
-local function AK_Tick()
-    if not AuraKill.Enabled then return end
+function AuraKill:_tick()
+    if not self.Enabled then return end
     local now = tick()
-    if now - AuraKill._lastFire < AuraKill.Interval then return end
-    AuraKill._lastFire = now
+    if now - self._lastFire < self.Interval then return end
+    self._lastFire = now
 
-    local myActor = AK_GetMyActor()
-    local myPos = (myActor and myActor.Position) or Camera.CFrame.Position
-    local enemies = AK_GetEnemies()
+    local me = GetMyActor()
+    local myPos = me and me.Position or Camera.CFrame.Position
+    local enemies = GetEnemies()
     if #enemies == 0 then return end
 
     local cand = {}
@@ -238,24 +423,24 @@ local function AK_Tick()
         local p = a.Position or (a.Character and a.Character.PrimaryPart and a.Character.PrimaryPart.Position)
         if p then
             local d = (p - myPos).Magnitude
-            if d <= AuraKill.Range then
-                cand[#cand + 1] = {a = a, d = d}
+            if d <= self.Range then
+                cand[#cand + 1] = { a = a, d = d }
             end
         end
     end
     if #cand == 0 then return end
     table.sort(cand, function(x, y) return x.d < y.d end)
 
-    local count = math.min(AuraKill.BatchSize, #cand)
+    local count = math.min(self.BatchSize, #cand)
     for i = 1, count do
         local tgt = cand[i].a
         task.spawn(function()
             local ok, err = AK_Fire(tgt)
             if not ok then
-                AuraKill._stats.failed = AuraKill._stats.failed + 1
-                log("fail:", err)
-                if err == "no net" then AuraKill._net = nil end
-                if err == "no remote" then AuraKill._remote = nil end
+                self._stats.failed = self._stats.failed + 1
+                AK_log("fail:", err)
+                if err == "no net" then self._net = nil end
+                if err == "no remote" then self._remote = nil end
             end
         end)
     end
@@ -264,33 +449,24 @@ end
 function AuraKill:Start()
     if self._running then return end
     self._running = true
-    self.Enabled  = true
+    self.Enabled = true
     task.spawn(AK_FindNet)
     task.spawn(AK_GetRemote)
-    self._connection = RunService.Heartbeat:Connect(function()
-        local ok, err = pcall(AK_Tick)
-        if not ok then warn("[AuraKill] tick error:", err) end
+    self._conn = RunService.Heartbeat:Connect(function()
+        pcall(function() AuraKill:_tick() end)
     end)
-    print("[AuraKill] STARTED  | Range="..self.Range
-          .." Interval="..self.Interval
-          .." Batch="..self.BatchSize
-          .." Part="..self.TargetPart)
+    print("[AuraKill] STARTED")
 end
 
 function AuraKill:Stop()
     self._running = false
-    self.Enabled  = false
-    if self._connection then
-        pcall(function() self._connection:Disconnect() end)
-        self._connection = nil
-    end
-    print("[AuraKill] STOPPED | sent="..self._stats.sent
-          .." failed="..self._stats.failed)
+    self.Enabled = false
+    if self._conn then self._conn:Disconnect(); self._conn = nil end
+    print("[AuraKill] STOPPED | sent="..self._stats.sent.." failed="..self._stats.failed)
 end
 
 function AuraKill:Rescan()
-    self._net    = nil
-    self._remote = nil
+    self._net = nil; self._remote = nil
     local net = AK_FindNet()
     local re  = AK_GetRemote()
     print("[AuraKill] Rescan: net="..(net and tostring(net._code):sub(1,8) or "nil")
@@ -298,23 +474,116 @@ function AuraKill:Rescan()
     return net, re
 end
 
-function AuraKill:Debug(on)
-    self.DebugMode = on and true or false
-    print("[AuraKill] Debug "..(self.DebugMode and "ON" or "OFF"))
-end
-
-function AuraKill:Status()
-    print(string.format(
-        "[AuraKill] Enabled=%s Running=%s Sent=%d Failed=%d Range=%d Interval=%.3f Batch=%d",
-        tostring(self.Enabled), tostring(self._running),
-        self._stats.sent, self._stats.failed,
-        self.Range, self.Interval, self.BatchSize
-    ))
-end
-
 _G.AuraKill = AuraKill
 getgenv().AuraKill = AuraKill
 
-task.wait(1)
-AuraKill:Rescan()
-AuraKill:Start()
+local AutoFarm = {
+    Enabled = true,
+    OffsetY = -2,
+    TeleportInterval = 0.15,
+    AttackInterval = 0.1,
+    _conn = nil,
+    _running = false,
+    _originCF = nil,
+    _lastTP = 0,
+    _lastATK = 0,
+}
+
+function AutoFarm:_teleportTo(actor)
+    local me = GetMyActor()
+    if not me then return end
+    local pos = actor.Position
+    if not pos and actor.Character and actor.Character.PrimaryPart then
+        pos = actor.Character.PrimaryPart.Position
+    end
+    if not pos then return end
+    local targetPos = Vector3.new(pos.X, pos.Y + self.OffsetY, pos.Z)
+    pcall(function()
+        me.SimulatedPosition = targetPos
+        me.CFrame = CFrame.new(targetPos)
+        if ControllerService and ControllerService.Controller then
+            ControllerService.Controller._position = targetPos
+            ControllerService.Controller._lastSafePosition = targetPos
+        end
+    end)
+end
+
+function AutoFarm:_getClosest()
+    local me = GetMyActor()
+    if not me or not me.Position then return nil end
+    local best, bestDist = nil, math.huge
+    for _, a in ipairs(GetEnemies()) do
+        local p = a.Position
+        if p then
+            local d = (p - me.Position).Magnitude
+            if d < bestDist then bestDist = d; best = a end
+        end
+    end
+    return best
+end
+
+function AutoFarm:_tick()
+    if not self.Enabled then return end
+    local target = self:_getClosest()
+    if not target then return end
+
+    local now = tick()
+
+    if not self._originCF then
+        local me = GetMyActor()
+        if me then
+            self._originCF = me.CFrame or (me.Position and CFrame.new(me.Position))
+        end
+    end
+
+    if now - self._lastTP >= self.TeleportInterval then
+        self._lastTP = now
+        self:_teleportTo(target)
+    end
+
+    if now - self._lastATK >= self.AttackInterval then
+        self._lastATK = now
+        if AuraKill and AuraKill.Enabled then
+            task.spawn(function()
+                local ok = AK_Fire(target)
+                if not ok and AuraKill.Debug then AK_log("autofarm failed") end
+            end)
+        elseif KillAura and KillAura.Enabled then
+            KillAura:_attack(target)
+        end
+    end
+end
+
+function AutoFarm:Start()
+    if self._running then return end
+    if not (AuraKill.Enabled or KillAura.Enabled) then
+        warn("[AutoFarm] Enable AuraKill or KillAura first!")
+        return
+    end
+    self._running = true
+    self.Enabled = true
+    self._originCF = nil
+    self._conn = RunService.Heartbeat:Connect(function()
+        pcall(function() AutoFarm:_tick() end)
+    end)
+    print("[AutoFarm] STARTED")
+end
+
+function AutoFarm:Stop()
+    self._running = false
+    self.Enabled = false
+    if self._conn then self._conn:Disconnect(); self._conn = nil end
+    if self._originCF then
+        local me = GetMyActor()
+        if me then
+            pcall(function()
+                me.SimulatedPosition = self._originCF.Position
+                me.CFrame = self._originCF
+            end)
+        end
+    end
+    print("[AutoFarm] STOPPED")
+end
+
+_G.AutoFarm = AutoFarm
+getgenv().AutoFarm = AutoFarm
