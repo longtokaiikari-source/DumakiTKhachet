@@ -1,7 +1,15 @@
 -- ============================================================
---  AURAKILL TEST — Dump-verified từ MTC2/MeleeInventory.lua
---  network:FireServer("InventoryAction","Slash",n)
---  network:FireServer("InventoryAction","Impact",{x,y,z},uid,part)
+--  AURAKILL — dump-verified MeleeInventory + MeleeInventoryReplicator
+--
+--  Packet layout đúng per source:
+--    Slash:  net:FireServer("InventoryAction", "Slash", n)       -- n=1-3
+--    Impact: net:FireServer("InventoryAction", "Impact", dir, uid, partName)
+--               dir = {dirX, dirY, dirZ}  -- direction vector, NOT position
+--               server raycast từ actor.CFrame chest theo dir này
+--
+--  Raknet desync: fake SimulatedPosition về phía target trước khi gửi Impact
+--  → server raycast từ vị trí giả → hit dù đứng xa
+--
 --  Một nút bật/tắt. Drag được.
 -- ============================================================
 
@@ -9,35 +17,29 @@ local RunService  = game:GetService("RunService")
 local Players     = game:GetService("Players")
 local LocalPlayer = Players.LocalPlayer
 
+-- Default reach = 5-7 studs per Melee.lua config
+-- Dùng 7 (Tomahawk/Hooligan max reach) để chắc ăn
+local REACH = 7
+
 local AK = {
     Enabled    = false,
-    Range      = 20,
-    Interval   = 0,
-    TargetPart = "Head",
     _net       = nil,
+    _localActor= nil,
     _lastFire  = 0,
     _conn      = nil,
 }
 
 -- ──────────────────────────────────────────────────────────────
---  GET NETWORK OBJECT
---  MeleeInventory.lua line 1: shared.import("network")
---  Đây là v_u_2 — có FireServer() method riêng, không cần encrypt thủ công
+--  GET NETWORK OBJECT — shared.import("network") per Flux_client.lua
 -- ──────────────────────────────────────────────────────────────
 local function GetNet()
     if AK._net then return AK._net end
-
-    -- Method 1: shared.import — đúng theo source
     if shared and type(shared.import) == "function" then
         local ok, net = pcall(function() return shared.import("network") end)
         if ok and net and type(net.FireServer) == "function" then
-            AK._net = net
-            print("[AK] network via shared.import OK")
-            return net
+            AK._net = net; return net
         end
     end
-
-    -- Method 2: GC scan — tìm table có FireServer + _key + _code
     local gok, gc = pcall(function() return filtergc("table") end)
     if not gok then gok, gc = pcall(function() return getgc(true) end) end
     if gok and gc then
@@ -47,18 +49,63 @@ local function GetNet()
                 and type(rawget(v,"_key")) == "table"
                 and type(rawget(v,"_code")) == "string"
             then
-                AK._net = v
-                print("[AK] network via GC, code:", v._code:sub(1,8))
-                return v
+                AK._net = v; return v
             end
         end
     end
-
     return nil
 end
 
 -- ──────────────────────────────────────────────────────────────
---  GET UID — đúng theo AK_GetUID trong tipmobile
+--  GET LOCAL ACTOR — Replicator.LocalActor
+-- ──────────────────────────────────────────────────────────────
+local function GetLocalActor()
+    if AK._localActor then return AK._localActor end
+    local gok, gc = pcall(function() return getgc(true) end)
+    if gok and gc then
+        for _, v in pairs(gc) do
+            if type(v)=="table"
+                and rawget(v,"LocalActor")
+                and rawget(v,"Actors")
+            then
+                AK._localActor = v.LocalActor
+                return AK._localActor
+            end
+        end
+    end
+    return nil
+end
+
+-- ──────────────────────────────────────────────────────────────
+--  GET ACTORS TABLE
+-- ──────────────────────────────────────────────────────────────
+local function GetActors()
+    local gok, gc = pcall(function() return getgc(true) end)
+    if gok and gc then
+        for _, v in pairs(gc) do
+            if type(v)=="table"
+                and rawget(v,"LocalActor")
+                and rawget(v,"Actors")
+                and type(rawget(v,"Actors"))=="table"
+            then
+                return v.Actors
+            end
+        end
+    end
+    local result = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character then
+            result[#result+1] = {
+                Alive=true, Character=p.Character,
+                UID=tostring(p.UserId),
+            }
+        end
+    end
+    return result
+end
+
+-- ──────────────────────────────────────────────────────────────
+--  GET UID
 -- ──────────────────────────────────────────────────────────────
 local function GetUID(actor)
     for _, field in ipairs({"UID","_id","Id","UUID"}) do
@@ -72,9 +119,47 @@ local function GetUID(actor)
 end
 
 -- ──────────────────────────────────────────────────────────────
---  FIRE — đúng per MeleeInventory._use dump
---  Slash: network:FireServer("InventoryAction","Slash",n)
---  Impact: network:FireServer("InventoryAction","Impact",{x,y,z},uid,part)
+--  FAKE SIMULATED POSITION — raknet desync
+--  Set SimulatedPosition về phía target → server raycast từ đó
+-- ──────────────────────────────────────────────────────────────
+local function FakePos(targetPos)
+    local la = GetLocalActor()
+    if la then
+        pcall(function() la.SimulatedPosition = targetPos end)
+    end
+    -- Fallback: character HumanoidRootPart CFrame
+    local char = LocalPlayer.Character
+    if char then
+        local root = char:FindFirstChild("HumanoidRootPart")
+        if root then
+            pcall(function()
+                root.CFrame = CFrame.new(targetPos)
+            end)
+        end
+    end
+end
+
+local function RestorePos(originalPos)
+    local la = GetLocalActor()
+    if la then
+        pcall(function() la.SimulatedPosition = originalPos end)
+    end
+end
+
+-- ──────────────────────────────────────────────────────────────
+--  FIRE — packet đúng per MeleeInventory._use + MeleeInventoryReplicator.Impact
+--
+--  Server flow:
+--    1. Nhận "Slash" → play animation
+--    2. Nhận "Impact" với direction vector dir
+--    3. Server raycast từ actor.CFrame:PointToWorldSpace(0,2.5,0) theo dir
+--    4. Nếu hit → apply damage
+--
+--  Desync flow:
+--    1. Fake SimulatedPosition về sát target
+--    2. Gửi Slash
+--    3. task.delay(0.3) gửi Impact với dir = (target - fakePos).Unit * REACH
+--    4. Restore SimulatedPosition
 -- ──────────────────────────────────────────────────────────────
 local function AK_Fire(actor)
     local net = GetNet()
@@ -83,67 +168,54 @@ local function AK_Fire(actor)
     local char = actor.Character
     if not char then return false end
 
-    local part = char:FindFirstChild(AK.TargetPart)
-               or char:FindFirstChild("Head")
+    -- Tìm target part
+    local part = char:FindFirstChild("Head")
                or char:FindFirstChild("UpperTorso")
                or char.PrimaryPart
     if not part then return false end
 
-    local pos = part.Position
     local uid = GetUID(actor)
     if not uid then return false end
 
+    local targetPos = part.Position
+
+    -- Lưu vị trí thật
+    local la = GetLocalActor()
+    local realPos = la and la.SimulatedPosition
+    local char2 = LocalPlayer.Character
+    local root = char2 and char2:FindFirstChild("HumanoidRootPart")
+    local realCF = root and root.CFrame
+
+    -- Fake position về sát target (0.5 studs trước mặt target)
+    local fakePos = targetPos + Vector3.new(0, 0, 0.5)
+    FakePos(fakePos)
+
     local n = math.random(1, 3)
 
-    -- Slash packet — đúng per source line: v_u_2:FireServer("InventoryAction","Slash",v13)
+    -- Slash packet — exact per MeleeInventory line: v_u_2:FireServer("InventoryAction","Slash",v13)
     pcall(function()
         net:FireServer("InventoryAction", "Slash", n)
     end)
 
-    -- Impact packet — đúng per source:
-    -- v_u_2:FireServer("InventoryAction","Impact", v_u_7(v15), v16, v17)
-    -- v_u_7 = vector3toTable = {X,Y,Z}
-    -- v16 = actor UID, v17 = part name
-    pcall(function()
-        net:FireServer("InventoryAction", "Impact", {pos.X, pos.Y, pos.Z}, uid, part.Name)
+    -- Impact packet sau delay (per _use: task.delay(p_u_11._delay, ...))
+    -- dir = camera.CFrame.LookVector * _distance trong source
+    -- Nhưng ta fake pos rồi nên dir = (target - fakePos).Unit * REACH
+    task.delay(0.25, function()
+        pcall(function()
+            local dir = (targetPos - fakePos).Unit * REACH
+            -- vector3toTable = {X,Y,Z} per source
+            net:FireServer("InventoryAction", "Impact", {dir.X, dir.Y, dir.Z}, uid, part.Name)
+        end)
+        -- Restore position sau khi Impact gửi xong
+        task.delay(0.05, function()
+            if realPos then RestorePos(realPos) end
+            if realCF and root then
+                pcall(function() root.CFrame = realCF end)
+            end
+        end)
     end)
 
-    print(string.format("[AK] Fired → %s [%s] dist=%.1f",
-        uid:sub(1,8), part.Name, pos.Magnitude))
     return true
-end
-
--- ──────────────────────────────────────────────────────────────
---  ACTOR SCAN — BRM5 Replicator.Actors
--- ──────────────────────────────────────────────────────────────
-local function GetActors()
-    -- Method 1: BRM5 Replicator via GC
-    local gok, gc = pcall(function() return getgc(true) end)
-    if gok and gc then
-        for _, v in pairs(gc) do
-            if type(v)=="table"
-                and rawget(v,"LocalActor")
-                and rawget(v,"Actors")
-                and type(rawget(v,"Actors"))=="table"
-            then
-                return v.Actors
-            end
-        end
-    end
-
-    -- Method 2: wrap Players
-    local result = {}
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and p.Character then
-            result[#result+1] = {
-                Alive    = true,
-                Character= p.Character,
-                Position = p.Character.PrimaryPart and p.Character.PrimaryPart.Position,
-                UID      = tostring(p.UserId),
-            }
-        end
-    end
-    return result
 end
 
 -- ──────────────────────────────────────────────────────────────
@@ -152,44 +224,44 @@ end
 local function AK_Tick()
     if not AK.Enabled then return end
     local now = tick()
-    if now - AK._lastFire < AK.Interval then return end
+    -- Rate limit: 1 swing per 0.5s để không spam server
+    if now - AK._lastFire < 0.5 then return end
 
     local char = LocalPlayer.Character
     local root = char and char:FindFirstChild("HumanoidRootPart")
     if not root then return end
     local myPos = root.Position
 
-    local actors   = GetActors()
-    local candidates = {}
+    local actors = GetActors()
+    local closest = nil
+    local closestDist = math.huge
 
     for _, a in pairs(actors) do
         if not a or not a.Alive or not a.Character then continue end
-        local aPos = a.Position
-        if not aPos then
-            local pp = a.Character.PrimaryPart
-            if pp then aPos = pp.Position end
-        end
+        local aPos
+        local pp = a.Character.PrimaryPart
+        if pp then aPos = pp.Position end
         if not aPos then continue end
         local d = (aPos - myPos).Magnitude
-        if d <= AK.Range then
-            candidates[#candidates+1] = {Actor=a, Distance=d}
+        if d < closestDist then
+            closestDist = d
+            closest = a
         end
     end
 
-    if #candidates == 0 then return end
-    table.sort(candidates, function(a,b) return a.Distance < b.Distance end)
+    if not closest then return end
 
     AK._lastFire = now
-    for i = 1, math.min(10, #candidates) do
-        local target = candidates[i].Actor
-        task.spawn(function()
-            if not AK_Fire(target) then AK._net = nil end
-        end)
-    end
+    task.spawn(function()
+        if not AK_Fire(closest) then
+            AK._net = nil
+            AK._localActor = nil
+        end
+    end)
 end
 
 -- ──────────────────────────────────────────────────────────────
---  UI — một nút bật/tắt, drag được
+--  UI
 -- ──────────────────────────────────────────────────────────────
 local sg = Instance.new("ScreenGui")
 sg.Name = "AK_TestGui"
@@ -199,8 +271,8 @@ pcall(function() sg.Parent = game:GetService("CoreGui") end)
 if not sg.Parent then sg.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.fromOffset(200, 92)
-frame.Position = UDim2.new(0, 20, 0.5, -46)
+frame.Size = UDim2.fromOffset(210, 100)
+frame.Position = UDim2.new(0, 20, 0.5, -50)
 frame.BackgroundColor3 = Color3.fromRGB(18,18,18)
 frame.BorderSizePixel = 0
 frame.Active = true
@@ -222,7 +294,7 @@ local statusLabel = Instance.new("TextLabel")
 statusLabel.Size = UDim2.new(1,-10,0,18)
 statusLabel.Position = UDim2.fromOffset(5,28)
 statusLabel.BackgroundTransparency = 1
-statusLabel.Text = "Status: OFF | Net: scanning..."
+statusLabel.Text = "Net: scanning..."
 statusLabel.TextColor3 = Color3.fromRGB(150,150,150)
 statusLabel.Font = Enum.Font.Gotham
 statusLabel.TextSize = 11
@@ -230,8 +302,8 @@ statusLabel.TextXAlignment = Enum.TextXAlignment.Left
 statusLabel.Parent = frame
 
 local btn = Instance.new("TextButton")
-btn.Size = UDim2.new(1,-16,0,36)
-btn.Position = UDim2.fromOffset(8, 50)
+btn.Size = UDim2.new(1,-16,0,38)
+btn.Position = UDim2.fromOffset(8, 52)
 btn.BackgroundColor3 = Color3.fromRGB(45,160,75)
 btn.Text = "ENABLE"
 btn.TextColor3 = Color3.new(1,1,1)
@@ -244,6 +316,7 @@ btn.MouseButton1Click:Connect(function()
     AK.Enabled = not AK.Enabled
     if AK.Enabled then
         task.spawn(GetNet)
+        task.spawn(GetLocalActor)
         if not AK._conn then
             AK._conn = RunService.Heartbeat:Connect(AK_Tick)
         end
@@ -259,14 +332,15 @@ btn.MouseButton1Click:Connect(function()
     end
 end)
 
--- Status updater
 RunService.Heartbeat:Connect(function()
     local netOk = AK._net ~= nil
-    statusLabel.Text = string.format("Status: %s | Net: %s",
-        AK.Enabled and "ON" or "OFF",
-        netOk and "OK ("..AK._net._code:sub(1,6).."...)" or "scanning..."
+    local laOk  = AK._localActor ~= nil
+    statusLabel.Text = string.format("Net: %s | Actor: %s | %s",
+        netOk and "OK" or "...",
+        laOk  and "OK" or "...",
+        AK.Enabled and "ON" or "OFF"
     )
 end)
 
 getgenv().AuraKill_Test = AK
-print("[AuraKill] Loaded — dump-verified MeleeInventory packet layout")
+print("[AuraKill] Loaded — dir-based packet + SimulatedPosition desync")
