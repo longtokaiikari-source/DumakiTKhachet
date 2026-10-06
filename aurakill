@@ -149,8 +149,8 @@ _G.MagicBullet = MagicBullet
 getgenv().MagicBullet = MagicBullet
 
 local KillAura = {
-    Enabled = false,
-    Range = 15,
+    Enabled = true,
+    Range = 2000,
     Interval = 0.1,
     TargetPart = "Head",
     _last = 0,
