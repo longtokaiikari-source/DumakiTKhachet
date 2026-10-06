@@ -1,53 +1,109 @@
 -- ============================================================
---  AURAKILL — dump-verified MeleeInventory + MeleeInventoryReplicator
+--  AURAKILL — rbxraknet bitstream desync
+--  Ring Ring spec: fake ReplicateMovement packet via raknet
+--  để server nghĩ mày đứng cạnh NPC trong khi đứng xa
 --
---  Packet layout đúng per source:
---    Slash:  net:FireServer("InventoryAction", "Slash", n)       -- n=1-3
---    Impact: net:FireServer("InventoryAction", "Impact", dir, uid, partName)
---               dir = {dirX, dirY, dirZ}  -- direction vector, NOT position
---               server raycast từ actor.CFrame chest theo dir này
+--  rbxraknet API (Synapse X / UNC standard):
+--    local bs = rbxraknet.newBitStream()
+--    bs:ResetWritePointer()
+--    bs:WriteByte(packetID)
+--    bs:WriteString(...)
+--    bs:WriteFloat(x) bs:WriteFloat(y) bs:WriteFloat(z)
+--    rbxraknet.sendPacket(bs)  /  bs:Send()
 --
---  Raknet desync: fake SimulatedPosition về phía target trước khi gửi Impact
---  → server raycast từ vị trí giả → hit dù đứng xa
+--  ReplicatorService.lua line 230 — packet format:
+--    FireUnreliableServer("ReplicateMovement", uid,
+--        pos.X, pos.Y, pos.Z,
+--        Orientation, Sprinting, HeightState,
+--        CameraX, CameraY, LeanGoal, Platform)
 --
---  Một nút bật/tắt. Drag được.
+--  Fallback: ForceNextPosition (dump-verified line 229)
 -- ============================================================
 
 local RunService  = game:GetService("RunService")
 local Players     = game:GetService("Players")
+local HttpService = game:GetService("HttpService")
 local LocalPlayer = Players.LocalPlayer
 
--- Default reach = 5-7 studs per Melee.lua config
--- Dùng 7 (Tomahawk/Hooligan max reach) để chắc ăn
-local REACH = 7
+local REACH = 7  -- max per Melee.lua (Tomahawk)
 
 local AK = {
-    Enabled    = false,
-    _net       = nil,
-    _localActor= nil,
-    _lastFire  = 0,
-    _conn      = nil,
+    Enabled     = false,
+    _net        = nil,
+    _replicator = nil,
+    _uid        = nil,
+    _lastFire   = 0,
+    _conn       = nil,
 }
 
 -- ──────────────────────────────────────────────────────────────
---  GET NETWORK OBJECT — shared.import("network") per Flux_client.lua
+--  RAKNET API PROBE — tìm đúng tên executor expose
+-- ──────────────────────────────────────────────────────────────
+local RakNet = nil
+local function GetRakNet()
+    if RakNet then return RakNet end
+    -- Synapse X / KRNL / Fluxus / UNC standard names
+    for _, name in ipairs({
+        "rbxraknet","RbxRakNet","raknet","RakNet",
+        "NetworkClient","rbxnetwork","RbxNetwork",
+    }) do
+        local v = rawget(getgenv(), name)
+        if v then RakNet = v; print("[AK] raknet API:", name); return v end
+    end
+    return nil
+end
+
+-- newBitStream — tên khác nhau tùy executor
+local function NewBS()
+    local rn = GetRakNet()
+    if not rn then return nil end
+    for _, fn in ipairs({"newBitStream","new","NewBitStream","createBitStream","BitStream"}) do
+        if type(rn[fn]) == "function" then
+            local ok, bs = pcall(rn[fn], rn)
+            if ok and bs then return bs end
+        end
+    end
+    -- Một số executor expose thẳng hàm global
+    for _, fn in ipairs({"newBitStream","NewBitStream","rbxraknet_new"}) do
+        local gv = rawget(getgenv(), fn)
+        if type(gv) == "function" then
+            local ok, bs = pcall(gv)
+            if ok and bs then return bs end
+        end
+    end
+    return nil
+end
+
+-- Send bitstream — tên khác nhau tùy executor
+local function SendBS(bs)
+    -- Method 1: bs:Send()
+    if type(rawget(bs,"Send")) == "function" then
+        pcall(function() bs:Send() end); return
+    end
+    -- Method 2: rbxraknet.sendPacket(bs)
+    local rn = GetRakNet()
+    if rn then
+        for _, fn in ipairs({"sendPacket","SendPacket","send","Send","firePacket"}) do
+            if type(rn[fn]) == "function" then
+                pcall(function() rn[fn](rn, bs) end); return
+            end
+        end
+    end
+end
+
+-- ──────────────────────────────────────────────────────────────
+--  GET NETWORK OBJECT
 -- ──────────────────────────────────────────────────────────────
 local function GetNet()
     if AK._net then return AK._net end
-    if shared and type(shared.import) == "function" then
-        local ok, net = pcall(function() return shared.import("network") end)
-        if ok and net and type(net.FireServer) == "function" then
-            AK._net = net; return net
-        end
-    end
     local gok, gc = pcall(function() return filtergc("table") end)
     if not gok then gok, gc = pcall(function() return getgc(true) end) end
     if gok and gc then
         for _, v in pairs(gc) do
             if type(v) ~= "table" then continue end
             if type(rawget(v,"FireServer")) == "function"
-                and type(rawget(v,"_key")) == "table"
-                and type(rawget(v,"_code")) == "string"
+            and type(rawget(v,"_key"))     == "table"
+            and type(rawget(v,"_code"))    == "string"
             then
                 AK._net = v; return v
             end
@@ -57,51 +113,38 @@ local function GetNet()
 end
 
 -- ──────────────────────────────────────────────────────────────
---  GET LOCAL ACTOR — Replicator.LocalActor
+--  GET REPLICATOR + UID
+--  ReplicatorService: v107=p105._uid, v108=p105.LocalActor
 -- ──────────────────────────────────────────────────────────────
-local function GetLocalActor()
-    if AK._localActor then return AK._localActor end
+local function GetReplicator()
+    if AK._replicator and AK._replicator.LocalActor then
+        return AK._replicator
+    end
     local gok, gc = pcall(function() return getgc(true) end)
     if gok and gc then
         for _, v in pairs(gc) do
-            if type(v)=="table"
-                and rawget(v,"LocalActor")
-                and rawget(v,"Actors")
+            if type(v) == "table"
+            and rawget(v,"LocalActor")
+            and rawget(v,"Actors")
+            and rawget(v,"_uid")
             then
-                AK._localActor = v.LocalActor
-                return AK._localActor
+                AK._replicator = v
+                AK._uid = v._uid
+                return v
+            end
+        end
+        -- fallback: không có _uid trực tiếp
+        for _, v in pairs(gc) do
+            if type(v) == "table"
+            and rawget(v,"LocalActor")
+            and rawget(v,"Actors")
+            then
+                AK._replicator = v
+                return v
             end
         end
     end
     return nil
-end
-
--- ──────────────────────────────────────────────────────────────
---  GET ACTORS TABLE
--- ──────────────────────────────────────────────────────────────
-local function GetActors()
-    local gok, gc = pcall(function() return getgc(true) end)
-    if gok and gc then
-        for _, v in pairs(gc) do
-            if type(v)=="table"
-                and rawget(v,"LocalActor")
-                and rawget(v,"Actors")
-                and type(rawget(v,"Actors"))=="table"
-            then
-                return v.Actors
-            end
-        end
-    end
-    local result = {}
-    for _, p in ipairs(Players:GetPlayers()) do
-        if p ~= LocalPlayer and p.Character then
-            result[#result+1] = {
-                Alive=true, Character=p.Character,
-                UID=tostring(p.UserId),
-            }
-        end
-    end
-    return result
 end
 
 -- ──────────────────────────────────────────────────────────────
@@ -119,47 +162,57 @@ local function GetUID(actor)
 end
 
 -- ──────────────────────────────────────────────────────────────
---  FAKE SIMULATED POSITION — raknet desync
---  Set SimulatedPosition về phía target → server raycast từ đó
+--  FAKE REPLICATEMOVEMENT — raknet bitstream path
+--  ReplicatorService line 230:
+--    FireUnreliableServer("ReplicateMovement", uid,
+--        X, Y, Z, Orientation, Sprinting, HeightState,
+--        CameraX, CameraY, LeanGoal, Platform)
+--  FireUnreliableServer = UnreliableRemoteEvent:FireServer(JSONEncode({...}))
+--  Ở đây ta inject vào raknet layer thấp hơn để spoof position
 -- ──────────────────────────────────────────────────────────────
-local function FakePos(targetPos)
-    local la = GetLocalActor()
-    if la then
-        pcall(function() la.SimulatedPosition = targetPos end)
+local function FakeReplicateMovement(fakePos)
+    local rep = GetReplicator()
+    local la  = rep and rep.LocalActor
+    if not la then return false end
+
+    -- Method 1: rbxraknet bitstream — gửi thẳng packet
+    local bs = NewBS()
+    if bs then
+        -- UnreliableRemoteEvent packet structure (Roblox internal):
+        -- packet ID 0x83 (131) = ReplicationData
+        -- sau đó là JSON payload giống FireUnreliableServer
+        local uid  = AK._uid or rep._uid or ""
+        local ori  = la.Orientation or 0
+        local spr  = la.Sprinting   or false
+        local hs   = la.HeightState or 0
+        local cx   = la.CameraX     or 0
+        local cy   = la.CameraY     or 0
+        local lean = la.LeanGoal    or 0
+        local plat = la.Platform    or false
+
+        local payload = HttpService:JSONEncode({
+            "ReplicateMovement", uid,
+            fakePos.X, fakePos.Y, fakePos.Z,
+            ori, spr, hs, cx, cy, lean, plat
+        })
+
+        pcall(function()
+            bs:ResetWritePointer()
+            bs:WriteByte(0x83)        -- Roblox replication packet ID
+            bs:WriteString(payload)
+            SendBS(bs)
+        end)
+        return true
     end
-    -- Fallback: character HumanoidRootPart CFrame
-    local char = LocalPlayer.Character
-    if char then
-        local root = char:FindFirstChild("HumanoidRootPart")
-        if root then
-            pcall(function()
-                root.CFrame = CFrame.new(targetPos)
-            end)
-        end
-    end
+
+    -- Method 2: ForceNextPosition fallback (dump-verified)
+    pcall(function() la.ForceNextPosition = fakePos end)
+    pcall(function() la.SimulatedPosition = fakePos end)
+    return true
 end
 
-local function RestorePos(originalPos)
-    local la = GetLocalActor()
-    if la then
-        pcall(function() la.SimulatedPosition = originalPos end)
-    end
-end
-
 -- ──────────────────────────────────────────────────────────────
---  FIRE — packet đúng per MeleeInventory._use + MeleeInventoryReplicator.Impact
---
---  Server flow:
---    1. Nhận "Slash" → play animation
---    2. Nhận "Impact" với direction vector dir
---    3. Server raycast từ actor.CFrame:PointToWorldSpace(0,2.5,0) theo dir
---    4. Nếu hit → apply damage
---
---  Desync flow:
---    1. Fake SimulatedPosition về sát target
---    2. Gửi Slash
---    3. task.delay(0.3) gửi Impact với dir = (target - fakePos).Unit * REACH
---    4. Restore SimulatedPosition
+--  FIRE
 -- ──────────────────────────────────────────────────────────────
 local function AK_Fire(actor)
     local net = GetNet()
@@ -168,7 +221,6 @@ local function AK_Fire(actor)
     local char = actor.Character
     if not char then return false end
 
-    -- Tìm target part
     local part = char:FindFirstChild("Head")
                or char:FindFirstChild("UpperTorso")
                or char.PrimaryPart
@@ -178,39 +230,37 @@ local function AK_Fire(actor)
     if not uid then return false end
 
     local targetPos = part.Position
+    local fakePos   = targetPos + Vector3.new(0, 0.5, 0)
 
-    -- Lưu vị trí thật
-    local la = GetLocalActor()
-    local realPos = la and la.SimulatedPosition
-    local char2 = LocalPlayer.Character
-    local root = char2 and char2:FindFirstChild("HumanoidRootPart")
-    local realCF = root and root.CFrame
+    -- Step 1: fake position lên server
+    FakeReplicateMovement(fakePos)
 
-    -- Fake position về sát target (0.5 studs trước mặt target)
-    local fakePos = targetPos + Vector3.new(0, 0, 0.5)
-    FakePos(fakePos)
-
+    -- Step 2: Slash
     local n = math.random(1, 3)
-
-    -- Slash packet — exact per MeleeInventory line: v_u_2:FireServer("InventoryAction","Slash",v13)
     pcall(function()
         net:FireServer("InventoryAction", "Slash", n)
     end)
 
-    -- Impact packet sau delay (per _use: task.delay(p_u_11._delay, ...))
-    -- dir = camera.CFrame.LookVector * _distance trong source
-    -- Nhưng ta fake pos rồi nên dir = (target - fakePos).Unit * REACH
+    -- Step 3: Impact sau delay
     task.delay(0.25, function()
         pcall(function()
-            local dir = (targetPos - fakePos).Unit * REACH
-            -- vector3toTable = {X,Y,Z} per source
-            net:FireServer("InventoryAction", "Impact", {dir.X, dir.Y, dir.Z}, uid, part.Name)
+            local dir = (targetPos - fakePos)
+            dir = (dir.Magnitude > 0 and dir.Unit or Vector3.new(0,0,-1)) * REACH
+            net:FireServer("InventoryAction", "Impact",
+                {dir.X, dir.Y, dir.Z}, uid, part.Name)
         end)
-        -- Restore position sau khi Impact gửi xong
+
+        -- Step 4: restore
         task.delay(0.05, function()
-            if realPos then RestorePos(realPos) end
-            if realCF and root then
-                pcall(function() root.CFrame = realCF end)
+            local myChar = LocalPlayer.Character
+            local root   = myChar and myChar:FindFirstChild("HumanoidRootPart")
+            local rep2   = GetReplicator()
+            local la2    = rep2 and rep2.LocalActor
+            if la2 and root then
+                pcall(function()
+                    la2.SimulatedPosition  = root.Position
+                    la2.ForceNextPosition  = nil
+                end)
             end
         end)
     end)
@@ -219,43 +269,53 @@ local function AK_Fire(actor)
 end
 
 -- ──────────────────────────────────────────────────────────────
+--  GET ACTORS
+-- ──────────────────────────────────────────────────────────────
+local function GetActors()
+    local rep = GetReplicator()
+    if rep and rep.Actors then return rep.Actors end
+    local result = {}
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= LocalPlayer and p.Character then
+            result[#result+1] = {
+                Alive=true, Character=p.Character,
+                UID=tostring(p.UserId),
+            }
+        end
+    end
+    return result
+end
+
+-- ──────────────────────────────────────────────────────────────
 --  TICK
 -- ──────────────────────────────────────────────────────────────
 local function AK_Tick()
     if not AK.Enabled then return end
     local now = tick()
-    -- Rate limit: 1 swing per 0.5s để không spam server
     if now - AK._lastFire < 0.5 then return end
 
-    local char = LocalPlayer.Character
-    local root = char and char:FindFirstChild("HumanoidRootPart")
+    local myChar = LocalPlayer.Character
+    local root   = myChar and myChar:FindFirstChild("HumanoidRootPart")
     if not root then return end
-    local myPos = root.Position
+    local myPos  = root.Position
 
-    local actors = GetActors()
-    local closest = nil
-    local closestDist = math.huge
+    local actors   = GetActors()
+    local closest  = nil
+    local closestD = math.huge
 
     for _, a in pairs(actors) do
         if not a or not a.Alive or not a.Character then continue end
-        local aPos
         local pp = a.Character.PrimaryPart
-        if pp then aPos = pp.Position end
-        if not aPos then continue end
-        local d = (aPos - myPos).Magnitude
-        if d < closestDist then
-            closestDist = d
-            closest = a
-        end
+        if not pp then continue end
+        local d = (pp.Position - myPos).Magnitude
+        if d < closestD then closestD = d; closest = a end
     end
 
     if not closest then return end
-
     AK._lastFire = now
     task.spawn(function()
         if not AK_Fire(closest) then
-            AK._net = nil
-            AK._localActor = nil
+            AK._net = nil; AK._replicator = nil
         end
     end)
 end
@@ -271,8 +331,8 @@ pcall(function() sg.Parent = game:GetService("CoreGui") end)
 if not sg.Parent then sg.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
 local frame = Instance.new("Frame")
-frame.Size = UDim2.fromOffset(210, 100)
-frame.Position = UDim2.new(0, 20, 0.5, -50)
+frame.Size = UDim2.fromOffset(220, 118)
+frame.Position = UDim2.new(0, 20, 0.5, -59)
 frame.BackgroundColor3 = Color3.fromRGB(18,18,18)
 frame.BorderSizePixel = 0
 frame.Active = true
@@ -283,27 +343,35 @@ Instance.new("UICorner", frame).CornerRadius = UDim.new(0,8)
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1,0,0,26)
 title.BackgroundColor3 = Color3.fromRGB(35,35,35)
-title.Text = "AuraKill [dump-verified]"
+title.Text = "AuraKill [rbxraknet desync]"
 title.TextColor3 = Color3.fromRGB(210,210,210)
 title.Font = Enum.Font.GothamBold
-title.TextSize = 12
+title.TextSize = 11
 title.Parent = frame
 Instance.new("UICorner", title).CornerRadius = UDim.new(0,8)
 
-local statusLabel = Instance.new("TextLabel")
-statusLabel.Size = UDim2.new(1,-10,0,18)
-statusLabel.Position = UDim2.fromOffset(5,28)
-statusLabel.BackgroundTransparency = 1
-statusLabel.Text = "Net: scanning..."
-statusLabel.TextColor3 = Color3.fromRGB(150,150,150)
-statusLabel.Font = Enum.Font.Gotham
-statusLabel.TextSize = 11
-statusLabel.TextXAlignment = Enum.TextXAlignment.Left
-statusLabel.Parent = frame
+local function MakeLabel(yPos, text)
+    local l = Instance.new("TextLabel")
+    l.Size = UDim2.new(1,-10,0,15)
+    l.Position = UDim2.fromOffset(5, yPos)
+    l.BackgroundTransparency = 1
+    l.Text = text
+    l.TextColor3 = Color3.fromRGB(140,140,140)
+    l.Font = Enum.Font.Gotham
+    l.TextSize = 11
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.Parent = frame
+    return l
+end
+
+local lNet    = MakeLabel(28,  "Net: ...")
+local lRep    = MakeLabel(43,  "Rep: ...")
+local lRakNet = MakeLabel(58,  "rbxraknet: ...")
+local lStatus = MakeLabel(73,  "Status: OFF")
 
 local btn = Instance.new("TextButton")
-btn.Size = UDim2.new(1,-16,0,38)
-btn.Position = UDim2.fromOffset(8, 52)
+btn.Size = UDim2.new(1,-16,0,34)
+btn.Position = UDim2.fromOffset(8, 78)
 btn.BackgroundColor3 = Color3.fromRGB(45,160,75)
 btn.Text = "ENABLE"
 btn.TextColor3 = Color3.new(1,1,1)
@@ -316,7 +384,8 @@ btn.MouseButton1Click:Connect(function()
     AK.Enabled = not AK.Enabled
     if AK.Enabled then
         task.spawn(GetNet)
-        task.spawn(GetLocalActor)
+        task.spawn(GetReplicator)
+        task.spawn(GetRakNet)
         if not AK._conn then
             AK._conn = RunService.Heartbeat:Connect(AK_Tick)
         end
@@ -333,14 +402,11 @@ btn.MouseButton1Click:Connect(function()
 end)
 
 RunService.Heartbeat:Connect(function()
-    local netOk = AK._net ~= nil
-    local laOk  = AK._localActor ~= nil
-    statusLabel.Text = string.format("Net: %s | Actor: %s | %s",
-        netOk and "OK" or "...",
-        laOk  and "OK" or "...",
-        AK.Enabled and "ON" or "OFF"
-    )
+    lNet.Text    = "Net: "    ..(AK._net        and "OK" or "...")
+    lRep.Text    = "Rep: "    ..(AK._replicator  and "OK" or "...")
+    lRakNet.Text = "rbxraknet: "..(RakNet        and "OK" or "not found")
+    lStatus.Text = "Status: " ..(AK.Enabled      and "ON" or "OFF")
 end)
 
 getgenv().AuraKill_Test = AK
-print("[AuraKill] Loaded — dir-based packet + SimulatedPosition desync")
+print("[AuraKill] Loaded — rbxraknet bitstream + ForceNextPosition fallback")
