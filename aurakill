@@ -1,46 +1,267 @@
 -- ============================================================
---  AURAKILL — tipmobile pattern, extended range via SimulatedPosition
+--  AURAKILL — tipmobile cipher + bitstream desync
+--  Ring Ring spec: "you need to call bitstream"
 --
---  tipmobile logic (verified):
---    1. Fake myActor.SimulatedPosition + ctrl._position = targetPos
---    2. Fire Slash + Impact với target part position
---    3. Server raycast từ actor "đã ở" cạnh target → hit → damage
+--  Desync flow:
+--    bs = bitstream (executor global)
+--    bs:ResetWritePointer()
+--    bs:WriteByte(packetID)
+--    bs:WriteFloat(X) bs:WriteFloat(Y) bs:WriteFloat(Z)
+--    bs:Send() / rbxraknet.sendPacket(bs)
 --
---  Packet format per Flux_client dump:
---    Slash:  encrypt({_code, "InventoryAction", "Slash", n})  → RemoteEvent:FireServer
---    Impact: encrypt({_code, "InventoryAction", "Impact", {x,y,z}, uid, part}) → FireServer
+--  Sau đó fire Slash + Impact qua encrypted RemoteEvent
+--  như tipmobile — cipher đã verified
 -- ============================================================
 
 local RunService  = game:GetService("RunService")
 local Players     = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
+local RS          = game:GetService("ReplicatedStorage")
 local LocalPlayer = Players.LocalPlayer
 
+-- ──────────────────────────────────────────────────────────────
+--  BITSTREAM — Ring Ring: "you need to call bitstream"
+--  Executor expose sẵn global `bitstream` hoặc qua rbxraknet
+-- ──────────────────────────────────────────────────────────────
+local function BS_Get()
+    -- Pattern 1: `bitstream` là global object có sẵn Write methods
+    -- Ring Ring nói thẳng: call bitstream
+    local genv = getgenv()
+
+    -- Direct global `bitstream`
+    local raw = rawget(genv, "bitstream")
+    if raw then
+        -- Có thể là object hoặc constructor
+        if type(raw.WriteFloat) == "function" then
+            -- Đã là instance
+            return raw
+        elseif type(raw.new) == "function" then
+            local ok, bs = pcall(raw.new, raw)
+            if ok and bs and type(bs.WriteFloat) == "function" then return bs end
+        elseif type(raw) == "function" then
+            local ok, bs = pcall(raw)
+            if ok and bs and type(bs.WriteFloat) == "function" then return bs end
+        end
+    end
+
+    -- Pattern 2: rbxraknet
+    for _, name in ipairs({"rbxraknet","RbxRakNet","raknet","RakNet","rbxnet"}) do
+        local rn = rawget(genv, name)
+        if not rn then continue end
+        for _, fn in ipairs({"newBitStream","new","NewBitStream","createBitStream","BitStream"}) do
+            if type(rn[fn]) == "function" then
+                local ok, bs = pcall(rn[fn], rn)
+                if ok and bs and type(bs.WriteFloat) == "function" then
+                    return bs
+                end
+            end
+        end
+    end
+
+    -- Pattern 3: global constructor functions
+    for _, name in ipairs({"newBitStream","NewBitStream","createBitStream","BitStream"}) do
+        local fn = rawget(genv, name)
+        if type(fn) == "function" then
+            local ok, bs = pcall(fn)
+            if ok and bs and type(bs.WriteFloat) == "function" then return bs end
+        end
+    end
+
+    return nil
+end
+
+local function BS_Send(bs)
+    -- Method 1: bs:Send()
+    if type(rawget(bs, "Send")) == "function" then
+        pcall(function() bs:Send() end)
+        return true
+    end
+    -- Method 2: rbxraknet.sendPacket(bs)
+    local genv = getgenv()
+    for _, name in ipairs({"rbxraknet","RbxRakNet","raknet","RakNet"}) do
+        local rn = rawget(genv, name)
+        if not rn then continue end
+        for _, fn in ipairs({"sendPacket","SendPacket","send","Send","firePacket","FirePacket"}) do
+            if type(rn[fn]) == "function" then
+                pcall(function() rn[fn](rn, bs) end)
+                return true
+            end
+        end
+    end
+    -- Method 3: global sendPacket
+    local sp = rawget(genv, "sendPacket") or rawget(genv, "SendPacket")
+    if type(sp) == "function" then
+        pcall(function() sp(bs) end)
+        return true
+    end
+    return false
+end
+
+-- ──────────────────────────────────────────────────────────────
+--  REPLICATOR DATA
+-- ──────────────────────────────────────────────────────────────
+local _rep = nil
+local function GetRep()
+    if _rep and _rep.LocalActor then return _rep end
+    local gok, gc = pcall(function() return getgc(true) end)
+    if gok and gc then
+        for _, v in pairs(gc) do
+            if type(v)=="table"
+            and rawget(v,"LocalActor")
+            and rawget(v,"Actors")
+            and type(rawget(v,"Actors"))=="table"
+            then _rep=v; return v end
+        end
+    end
+    return nil
+end
+
+local function GetLocalActor()
+    local rep = GetRep()
+    return rep and rep.LocalActor
+end
+
+-- ──────────────────────────────────────────────────────────────
+--  BITSTREAM DESYNC
+--  Ring Ring spec:
+--    bs:ResetWritePointer()
+--    bs:WriteByte(packetID)
+--    bs:WriteFloat(X), WriteFloat(Y), WriteFloat(Z)
+--    + uid string, orientation, flags
+--
+--  Roblox UnreliableRemoteEvent raknet packet IDs:
+--    0x83 = ReplicationData (most common)
+--    0x86 = Physics
+--    0x8A = Event
+--  Ta thử 0x83 trước — đây là packet type Roblox dùng cho
+--  unreliable replication (movement)
+-- ──────────────────────────────────────────────────────────────
+local _bsDesyncOk = false
+
+local function BS_FakePosition(targetPos)
+    local bs = BS_Get()
+    if not bs then return false end
+
+    local la  = GetLocalActor()
+    local rep = GetRep()
+    local uid = ""
+    if rep then
+        -- _uid per ReplicatorService.lua line 104
+        uid = rawget(rep,"_uid") or ""
+    end
+    if uid == "" and la then
+        for _, v in pairs(la) do
+            if type(v)=="string" and v:match("^%x+%-%x+%-%x+%-%x+%-%x+$") then
+                uid=v; break
+            end
+        end
+    end
+
+    local orientation = la and la.Orientation or 0
+    local sprinting   = la and la.Sprinting   or false
+    local heightState = la and la.HeightState or 0
+    local cameraX     = la and la.CameraX     or 0
+    local cameraY     = la and la.CameraY     or 0
+
+    local ok = pcall(function()
+        bs:ResetWritePointer()
+
+        -- Packet ID: 0x83 = Roblox unreliable replication
+        bs:WriteByte(0x83)
+
+        -- Actor UID (string identifier)
+        bs:WriteString(uid)
+
+        -- Position — Ring Ring: WriteFloat for X/Y/Z
+        bs:WriteFloat(targetPos.X)
+        bs:WriteFloat(targetPos.Y)
+        bs:WriteFloat(targetPos.Z)
+
+        -- Orientation (short = 16-bit, degrees * 100)
+        bs:WriteShort(math.floor(orientation * 100) % 65536)
+
+        -- Flags (byte): Sprinting bit 0, Grounded bit 1
+        local flags = 0
+        if sprinting then flags = flags + 1 end
+        flags = flags + 2  -- grounded = true
+        bs:WriteByte(flags)
+
+        -- HeightState (byte)
+        bs:WriteByte(heightState or 0)
+
+        -- Camera angles (short each)
+        bs:WriteShort(math.floor(cameraX * 100) % 65536)
+        bs:WriteShort(math.floor(cameraY * 100) % 65536)
+    end)
+
+    if not ok then return false end
+
+    local sent = BS_Send(bs)
+    if sent then _bsDesyncOk = true end
+    return sent
+end
+
+local function BS_RestorePosition()
+    local bs = BS_Get()
+    if not bs then return end
+
+    local char = LocalPlayer.Character
+    local root = char and char:FindFirstChild("HumanoidRootPart")
+    if not root then return end
+    local realPos = root.Position
+
+    local rep = GetRep()
+    local uid = rep and rawget(rep,"_uid") or ""
+    local la  = GetLocalActor()
+    local orientation = la and la.Orientation or 0
+
+    pcall(function()
+        bs:ResetWritePointer()
+        bs:WriteByte(0x83)
+        bs:WriteString(uid)
+        bs:WriteFloat(realPos.X)
+        bs:WriteFloat(realPos.Y)
+        bs:WriteFloat(realPos.Z)
+        bs:WriteShort(math.floor(orientation * 100) % 65536)
+        bs:WriteByte(2)  -- grounded, not sprinting
+        bs:WriteByte(0)
+        bs:WriteShort(0)
+        bs:WriteShort(0)
+    end)
+    BS_Send(bs)
+
+    -- Fallback restore SimulatedPosition
+    if la then
+        pcall(function()
+            la.SimulatedPosition = realPos
+            la.ForceNextPosition = nil
+        end)
+    end
+end
+
+-- ──────────────────────────────────────────────────────────────
+--  AURAKILL — tipmobile AK_FindNet / AK_Encrypt / AK_Fire
+--  copy y chang cipher, thay globals bằng GC
+-- ──────────────────────────────────────────────────────────────
 local AK = {
     Enabled    = false,
-    Range      = 9999,   -- unlimited — SimulatedPosition fake nên range không giới hạn
+    Range      = 9999,
     Interval   = 0,
     BatchSize  = 10,
     TargetPart = "Head",
     _net       = nil,
     _remote    = nil,
-    _rep       = nil,
-    _ctrl      = nil,    -- ControllerService.Controller
     _lastFire  = 0,
     _conn      = nil,
     _running   = false,
 }
 
--- ──────────────────────────────────────────────────────────────
---  NETWORK — Flux_client.lua pattern
--- ──────────────────────────────────────────────────────────────
 local function AK_FindNet()
     if AK._net then return AK._net end
     if shared and type(shared.import)=="function" then
         local ok,net=pcall(function() return shared.import("network") end)
-        if ok and net and type(rawget(net,"_key"))=="table"
-            and type(rawget(net,"_code"))=="string" then
-            AK._net=net; return net
+        if ok and net and rawget(net,"_key") and rawget(net,"_code") then
+            AK._net=net; print("[AK] net shared.import:", net._code:sub(1,8)); return net
         end
     end
     local gok,gc=pcall(function() return filtergc("table") end)
@@ -51,9 +272,10 @@ local function AK_FindNet()
             local k=rawget(v,"_key"); local co=rawget(v,"_code"); local ev=rawget(v,"_events")
             if type(k)~="table" or #k<5 then continue end
             if type(co)~="string" or not co:match("^%x+%-%x+%-%x+%-%x+%-%x+$") then continue end
+            if type(ev)~="table" then continue end
             local ok2=true
             for _,n in ipairs(k) do if type(n)~="number" then ok2=false; break end end
-            if ok2 then AK._net=v; return v end
+            if ok2 then AK._net=v; print("[AK] net GC:", co:sub(1,8)); return v end
         end
     end
     return nil
@@ -61,7 +283,6 @@ end
 
 local function AK_GetRemote()
     if AK._remote and AK._remote.Parent then return AK._remote end
-    local RS=game:GetService("ReplicatedStorage")
     local ev=RS:FindFirstChild("Events")
     if ev then
         local re=ev:FindFirstChild("RemoteEvent")
@@ -73,9 +294,7 @@ local function AK_GetRemote()
     return nil
 end
 
--- ──────────────────────────────────────────────────────────────
---  CIPHER — Flux_client.lua netEncode (verified per tipmobile)
--- ──────────────────────────────────────────────────────────────
+-- cipher copy y chang từ tipmobile
 local function AK_NetEncode(jsonStr, key)
     local result=""
     for i=1,#jsonStr do
@@ -99,84 +318,6 @@ local function AK_Encrypt(data, net)
     return AK_NetEncode(raw, net._key)
 end
 
--- ──────────────────────────────────────────────────────────────
---  GET LOCAL ACTOR + CONTROLLER
--- ──────────────────────────────────────────────────────────────
-local function GetLocalActor()
-    if AK._rep and AK._rep.LocalActor then return AK._rep.LocalActor end
-    local gok,gc=pcall(function() return getgc(true) end)
-    if gok and gc then
-        for _,v in pairs(gc) do
-            if type(v)=="table"
-            and rawget(v,"LocalActor")
-            and rawget(v,"Actors")
-            then
-                AK._rep=v; return v.LocalActor
-            end
-        end
-    end
-    return nil
-end
-
-local function GetController()
-    if AK._ctrl then return AK._ctrl end
-    local gok,gc=pcall(function() return getgc(true) end)
-    if gok and gc then
-        for _,v in pairs(gc) do
-            if type(v)=="table"
-            and rawget(v,"_position") ~= nil
-            and rawget(v,"_lastSafePosition") ~= nil
-            and (rawget(v,"MoveSpeed") or rawget(v,"_accelerate") or rawget(v,"_integrate"))
-            then
-                AK._ctrl=v; return v
-            end
-        end
-    end
-    return nil
-end
-
--- ──────────────────────────────────────────────────────────────
---  FAKE POSITION — tipmobile AutoFarm pattern (dòng 3085-3099)
---  Set SimulatedPosition + ctrl._position về targetPos
---  → server nghĩ actor đứng cạnh target → raycast hit
--- ──────────────────────────────────────────────────────────────
-local _realPos = nil
-local function FakePosition(targetPos)
-    local myActor = GetLocalActor()
-    if not myActor then return end
-    _realPos = myActor.SimulatedPosition or myActor.Position
-    pcall(function()
-        local ctrl = GetController()
-        if ctrl then
-            ctrl._position = targetPos
-            ctrl._lastSafePosition = targetPos
-        end
-        myActor.SimulatedPosition = targetPos
-        myActor.CFrame = CFrame.new(targetPos)
-    end)
-end
-
-local function RestorePosition()
-    if not _realPos then return end
-    local myActor = GetLocalActor()
-    if not myActor then return end
-    pcall(function()
-        local char = LocalPlayer.Character
-        local root = char and char:FindFirstChild("HumanoidRootPart")
-        local realPos = (root and root.Position) or _realPos
-        local ctrl = GetController()
-        if ctrl then
-            ctrl._position = realPos
-            ctrl._lastSafePosition = realPos
-        end
-        myActor.SimulatedPosition = realPos
-    end)
-    _realPos = nil
-end
-
--- ──────────────────────────────────────────────────────────────
---  GET UID
--- ──────────────────────────────────────────────────────────────
 local function AK_GetUID(actor)
     for _,field in ipairs({"UID","_id","Id","UUID"}) do
         local v=rawget(actor,field)
@@ -188,108 +329,93 @@ local function AK_GetUID(actor)
     return nil
 end
 
--- ──────────────────────────────────────────────────────────────
---  FIRE — tipmobile AK_Fire + SimulatedPosition fake
--- ──────────────────────────────────────────────────────────────
 local function AK_Fire(actor)
-    local net    = AK_FindNet();    if not net    then return false end
-    local remote = AK_GetRemote(); if not remote then return false end
-    local char   = actor.Character; if not char   then return false end
-
-    local part = char:FindFirstChild(AK.TargetPart)
-               or char:FindFirstChild("Head")
-               or char:FindFirstChild("UpperTorso")
-               or char.PrimaryPart
+    local net=AK_FindNet(); if not net then return false end
+    local remote=AK_GetRemote(); if not remote then return false end
+    local char=actor.Character; if not char then return false end
+    local part=char:FindFirstChild(AK.TargetPart)
+        or char:FindFirstChild("Head")
+        or char:FindFirstChild("UpperTorso")
+        or char.PrimaryPart
     if not part then return false end
-
-    local uid = AK_GetUID(actor)
+    local pos=part.Position
+    local uid=AK_GetUID(actor)
     if not uid then return false end
 
-    local targetPos = part.Position
+    -- Step 1: bitstream desync — fake position về target
+    BS_FakePosition(pos)
 
-    -- Step 1: Fake SimulatedPosition về sát target
-    -- tipmobile dùng Y + OffsetY nhưng ta dùng Y thẳng
-    FakePosition(targetPos)
-
-    -- Step 2: Slash packet — {_code, "InventoryAction", "Slash", n}
-    local n = math.random(1,3)
-    local encSlash = AK_Encrypt({net._code, "InventoryAction", "Slash", n}, net)
+    -- Step 2: Slash — tipmobile cipher
+    local n=math.random(1,3)
+    local encSlash=AK_Encrypt({net._code,"InventoryAction","Slash",n},net)
     if encSlash then pcall(function() remote:FireServer(encSlash) end) end
 
-    -- Step 3: Impact ngay sau Slash (tipmobile không delay)
-    local encImpact = AK_Encrypt(
-        {net._code, "InventoryAction", "Impact", {targetPos.X, targetPos.Y, targetPos.Z}, uid, part.Name},
+    -- Step 3: Impact — tipmobile cipher, ngay sau Slash
+    local encImpact=AK_Encrypt(
+        {net._code,"InventoryAction","Impact",{pos.X,pos.Y,pos.Z},uid,part.Name},
         net
     )
     if encImpact then pcall(function() remote:FireServer(encImpact) end) end
 
-    -- Step 4: Restore position sau 100ms
-    task.delay(0.1, RestorePosition)
-
+    -- Step 4: Restore
+    task.delay(0.15, BS_RestorePosition)
     return true
 end
 
--- ──────────────────────────────────────────────────────────────
---  GET ACTORS
--- ──────────────────────────────────────────────────────────────
 local function GetActors()
-    if AK._rep and AK._rep.Actors then return AK._rep.Actors end
-    local gok,gc=pcall(function() return getgc(true) end)
-    if gok and gc then
-        for _,v in pairs(gc) do
-            if type(v)=="table"
-            and rawget(v,"LocalActor")
-            and rawget(v,"Actors")
-            and type(rawget(v,"Actors"))=="table"
-            then AK._rep=v; return v.Actors end
-        end
-    end
-    local result={}
+    local rep=GetRep()
+    if rep and rep.Actors then return rep.Actors end
+    local r={}
     for _,p in ipairs(Players:GetPlayers()) do
         if p~=LocalPlayer and p.Character then
-            result[#result+1]={Alive=true,Character=p.Character,UID=tostring(p.UserId)}
+            r[#r+1]={Alive=true,Character=p.Character,UID=tostring(p.UserId)}
         end
     end
-    return result
+    return r
 end
 
--- ──────────────────────────────────────────────────────────────
---  TICK
--- ──────────────────────────────────────────────────────────────
 local function AK_Tick()
     if not AK.Enabled then return end
     local now=tick()
     if now-AK._lastFire<AK.Interval then return end
-
     local myChar=LocalPlayer.Character
     local root=myChar and myChar:FindFirstChild("HumanoidRootPart")
     if not root then return end
     local myPos=root.Position
-
     local actors=GetActors()
     local candidates={}
-
     for _,a in pairs(actors) do
         if not a or not a.Alive or not a.Character then continue end
         local pp=a.Character.PrimaryPart
         if not pp then continue end
         local d=(pp.Position-myPos).Magnitude
-        if d<=AK.Range then
-            candidates[#candidates+1]={Actor=a,Distance=d}
-        end
+        if d<=AK.Range then candidates[#candidates+1]={Actor=a,Distance=d} end
     end
-
     if #candidates==0 then return end
     table.sort(candidates,function(a,b) return a.Distance<b.Distance end)
-
     AK._lastFire=now
     local count=math.min(AK.BatchSize,#candidates)
     for i=1,count do
-        local target=candidates[i].Actor
+        local t=candidates[i].Actor
         task.spawn(function()
-            if not AK_Fire(target) then AK._net=nil; AK._remote=nil end
+            if not AK_Fire(t) then AK._net=nil end
         end)
     end
+end
+
+function AK.Start()
+    if AK._running then return end
+    AK._running=true
+    task.spawn(AK_FindNet); task.spawn(AK_GetRemote)
+    AK._conn=RunService.Heartbeat:Connect(AK_Tick)
+    print("[AK] Started — bitstream desync + tipmobile cipher")
+end
+
+function AK.Stop()
+    AK._running=false
+    if AK._conn then pcall(function() AK._conn:Disconnect() end); AK._conn=nil end
+    BS_RestorePosition()
+    print("[AK] Stopped")
 end
 
 -- ──────────────────────────────────────────────────────────────
@@ -303,8 +429,8 @@ pcall(function() sg.Parent=game:GetService("CoreGui") end)
 if not sg.Parent then sg.Parent=LocalPlayer:WaitForChild("PlayerGui") end
 
 local frame=Instance.new("Frame")
-frame.Size=UDim2.fromOffset(220,120)
-frame.Position=UDim2.new(0,20,0.5,-60)
+frame.Size=UDim2.fromOffset(230,140)
+frame.Position=UDim2.new(0,20,0.5,-70)
 frame.BackgroundColor3=Color3.fromRGB(18,18,18)
 frame.BorderSizePixel=0
 frame.Active=true
@@ -315,14 +441,14 @@ Instance.new("UICorner",frame).CornerRadius=UDim.new(0,8)
 local title=Instance.new("TextLabel")
 title.Size=UDim2.new(1,0,0,26)
 title.BackgroundColor3=Color3.fromRGB(35,35,35)
-title.Text="AuraKill [SimPos desync]"
+title.Text="AuraKill [bitstream + cipher]"
 title.TextColor3=Color3.fromRGB(210,210,210)
 title.Font=Enum.Font.GothamBold
 title.TextSize=11
 title.Parent=frame
 Instance.new("UICorner",title).CornerRadius=UDim.new(0,8)
 
-local function MkLbl(y,t)
+local function MkL(y,t)
     local l=Instance.new("TextLabel")
     l.Size=UDim2.new(1,-10,0,15)
     l.Position=UDim2.fromOffset(5,y)
@@ -336,13 +462,15 @@ local function MkLbl(y,t)
     return l
 end
 
-local lNet=MkLbl(28,"Net: ...")
-local lCtrl=MkLbl(43,"Ctrl: ...")
-local lStatus=MkLbl(58,"Status: OFF")
+local lBS  = MkL(28,  "bitstream: scanning...")
+local lNet = MkL(43,  "Net: scanning...")
+local lRE  = MkL(58,  "Remote: scanning...")
+local lRep = MkL(73,  "Replicator: scanning...")
+local lSt  = MkL(88,  "Status: OFF")
 
 local btn=Instance.new("TextButton")
 btn.Size=UDim2.new(1,-16,0,36)
-btn.Position=UDim2.fromOffset(8,78)
+btn.Position=UDim2.fromOffset(8,100)
 btn.BackgroundColor3=Color3.fromRGB(45,160,75)
 btn.Text="ENABLE"
 btn.TextColor3=Color3.new(1,1,1)
@@ -354,29 +482,24 @@ Instance.new("UICorner",btn).CornerRadius=UDim.new(0,6)
 btn.MouseButton1Click:Connect(function()
     AK.Enabled=not AK.Enabled
     if AK.Enabled then
-        task.spawn(AK_FindNet); task.spawn(AK_GetRemote)
-        task.spawn(GetLocalActor); task.spawn(GetController)
-        if not AK._conn then
-            AK._conn=RunService.Heartbeat:Connect(AK_Tick)
-        end
+        AK.Start()
         btn.BackgroundColor3=Color3.fromRGB(200,45,45)
         btn.Text="DISABLE"
     else
-        if AK._conn then
-            pcall(function() AK._conn:Disconnect() end)
-            AK._conn=nil
-        end
-        RestorePosition()
+        AK.Stop()
         btn.BackgroundColor3=Color3.fromRGB(45,160,75)
         btn.Text="ENABLE"
     end
 end)
 
 RunService.Heartbeat:Connect(function()
-    lNet.Text="Net: "..(AK._net and "OK" or "scanning...")
-    lCtrl.Text="Ctrl: "..(AK._ctrl and "OK" or "scanning...")
-    lStatus.Text="Status: "..(AK.Enabled and "ON" or "OFF")
+    local bs=BS_Get()
+    lBS.Text  = "bitstream: "..(bs and "OK" or "not found")
+    lNet.Text = "Net: "..(AK._net and "OK ("..AK._net._code:sub(1,6).."...)" or "scanning...")
+    lRE.Text  = "Remote: "..(AK._remote and "OK" or "scanning...")
+    lRep.Text = "Replicator: "..(GetRep() and "OK" or "scanning...")
+    lSt.Text  = "Status: "..(AK.Enabled and "ON" or "OFF")
 end)
 
-getgenv().AuraKill_Test=AK
-print("[AuraKill] Loaded — SimulatedPosition desync per tipmobile AutoFarm pattern")
+getgenv().AuraKill=AK
+print("[AK] Loaded — Ring Ring spec: bitstream desync + tipmobile cipher")
